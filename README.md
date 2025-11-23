@@ -107,6 +107,9 @@ past
 cd "$(past)"
 ```
 
+<img width="877" height="388" alt="Screenshot_20251123_175944" src="https://github.com/user-attachments/assets/03ec4386-4a83-42e7-93fe-d4f1f5d0dee6" />
+
+
 > [!NOTE]
 > Both tools operate on the **CLIPBOARD** selection (the one that survives between apps), not the primary X11 selection.
 
