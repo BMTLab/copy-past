@@ -2,7 +2,7 @@
 
 # Name: past.sh
 # Author: Nikita Neverov (BMTLab)
-# Version: 1.2.0 # x-release-please-version
+# Version: 1.4.0 # x-release-please-version
 # Date: 2026-05-17
 # License: MIT
 #
@@ -12,7 +12,7 @@
 #   Integrates with KDE/Klipper and other managers automatically.
 #
 #   Behavior:
-#     - Prints content "as is" without appending an extra newline
+#     - Prints content 'as is' without appending an extra newline
 #       (unless the clipboard content itself has one).
 #     - On Wayland uses `wl-paste` and strips
 #       the single trailing newline that wl-paste appends,
@@ -21,11 +21,23 @@
 #       where `--no-newline` truncates the last line
 #       if the clipboard content is not LF-terminated.
 #
+#   MIME type support:
+#     - --type MIME requests a specific MIME type from the backend,
+#       useful for reading binary or rich-text payloads
+#       written with `copy --type` or `copy --image`.
+#     - --json is shorthand for --type application/json.
+#     - --image[=FORMAT] is shorthand for --type image/<format>
+#       (default png).
+#       Output is binary; redirect it to a file:
+#         past --image > screenshot.png
+#
 #   Backend override:
 #     - Set COPY_PAST_BACKEND={wl-clipboard|xclip|xsel}
 #       to force a specific backend.
 #       The same variable is honoured by copy.sh,
 #       so both halves of a round-trip stay consistent.
+#       xsel does not support MIME types,
+#       so non-text payloads fall back to an error there.
 #
 # Usage:
 #   # As a standalone script:
@@ -34,6 +46,9 @@
 #   # Sourced:
 #   source /path/to/past.sh
 #   my_var="$(past)"
+#
+#   # Binary payloads:
+#   past --image > clipboard.png
 #
 # Exit Codes:
 #   0: Success.
@@ -45,9 +60,12 @@
 #      No suitable clipboard utility found.
 #   4: PAST_ERR_BACKEND_FAILED
 #      The clipboard utility returned a non-zero exit code.
+#   5: PAST_ERR_TYPE_MISMATCH
+#      The active backend cannot handle the requested MIME type
+#      (e.g. xsel + --json).
 #
 # Disclaimer:
-#   This script is provided "as is", without any warranty.
+#   This script is provided 'as is', without any warranty.
 #   Ensure required dependencies (wl-clipboard, xclip, or xsel)
 #   are installed on your system.
 
@@ -74,6 +92,10 @@ if [[ -z ${PAST_ERR_BACKEND_FAILED+x} ]]; then
   readonly PAST_ERR_BACKEND_FAILED=4
 fi
 
+if [[ -z ${PAST_ERR_TYPE_MISMATCH+x} ]]; then
+  readonly PAST_ERR_TYPE_MISMATCH=5
+fi
+
 # endregion
 
 # region Internal helpers
@@ -96,14 +118,20 @@ Usage:
   past > output.txt
   echo "Clipboard contains: $(past)"
   past | cat
+  past --image > screenshot.png
   past --help
 
 Options:
-  -h, --help    Show this help message.
+  -h, --help            Show this help message.
+      --type MIME       Request a specific MIME type from the backend
+                        (e.g. application/json, image/png, text/html).
+  -j, --json            Shortcut for --type application/json.
+      --image[=FORMAT]  Read binary image data with the matching
+                        image/<format> MIME type (default png).
 
 Environment:
-  COPY_PAST_BACKEND   Force a specific backend
-                      (wl-clipboard | xclip | xsel).
+  COPY_PAST_BACKEND     Force a specific backend
+                        (wl-clipboard | xclip | xsel).
 EOF
 }
 
@@ -145,12 +173,12 @@ function __ps_have_cmd() {
 # region Backend detection
 
 #######################################
-# Detect the best available clipboard "read" backend.
+# Detect the best available clipboard 'read' backend.
 #
-# When COPY_PAST_BACKEND is set, that backend is used
-# (and its absence is a hard error).
-# Otherwise we prefer Wayland's wl-paste when a Wayland session is detected,
-# then fall back to xclip, and finally to xsel.
+# When COPY_PAST_BACKEND is set, that backend is used (and its
+# absence is a hard error). Otherwise we prefer Wayland's wl-paste
+# when a Wayland session is detected, then fall back to xclip,
+# then xsel.
 #
 # Arguments:
 #   1: Name of the array variable (nameref) to store the command.
@@ -161,11 +189,9 @@ function __ps_have_cmd() {
 #   PAST_ERR_USAGE: If COPY_PAST_BACKEND has an unknown value.
 #######################################
 function __ps_detect_backend() {
-  # Bash nameref: writes inside the function reach the caller's
-  # variable named in $1.
   local -n _backend_command="$1"
 
-  # Step 1: honour an explicit override from the environment.
+  # Step 1: honour an explicit override (env var).
   #
   # We deliberately omit --no-newline here, because wl-paste 2.2.1
   # has a known bug: it drops the last line when the clipboard
@@ -228,6 +254,51 @@ function __ps_detect_backend() {
   return "$PAST_ERR_NO_BACKEND"
 }
 
+#######################################
+# Append the backend-specific MIME-type flag
+# to a backend command array.
+#
+# Each backend uses a different flag for selecting MIME on read:
+#   - wl-paste:  --type MIME
+#   - xclip:     -t MIME
+#   - xsel:      unsupported (text/plain only)
+#
+# Arguments:
+#   1: Name of the backend command array (nameref).
+#   2: MIME type string (e.g. 'application/json').
+#
+# Returns:
+#   0: On success.
+#   PAST_ERR_TYPE_MISMATCH: If the backend does not support MIME types.
+#######################################
+function __ps_apply_mime() {
+  local -n _cmd="$1"
+  local -r mime="$2"
+
+  case "${_cmd[0]}" in
+    wl-paste)
+      _cmd+=(--type "$mime")
+      return 0
+      ;;
+    xclip)
+      _cmd+=(-t "$mime")
+      return 0
+      ;;
+    xsel)
+      __ps_error \
+        "xsel does not support MIME types; use wl-clipboard or xclip for '${mime}'" \
+        "$PAST_ERR_TYPE_MISMATCH" \
+        || return "$?"
+      ;;
+    *)
+      __ps_error \
+        "Internal error: unknown backend '${_cmd[0]}' for MIME type" \
+        "$PAST_ERR_GENERAL" \
+        || return "$?"
+      ;;
+  esac
+}
+
 # endregion
 
 # region wl-paste reader
@@ -243,6 +314,11 @@ function __ps_detect_backend() {
 #   and capture the exit code of wl-paste itself
 #   (NOT the trailing printf, which would mask failures).
 #
+#   This trick is text-only: capturing binary payloads through $()
+#   would corrupt embedded NUL bytes,
+#   so callers that target binary MIME types
+#   bypass this helper entirely.
+#
 # Arguments:
 #   1..N: backend command and its arguments (typically 'wl-paste').
 #
@@ -253,22 +329,15 @@ function __ps_detect_backend() {
 function __ps_read_wl_paste() {
   local raw exit_code
 
-  # Capture trick:
-  #   The earlier implementation appended a constant 'x' marker.
-  #   That hid wl-paste's exit code, because the LAST command in the
-  #   subshell (the printf) always returned 0, and `$(…) || …` only
-  #   sees that final status.
-  #
-  #   We now encode wl-paste's exit code into the marker itself
-  #   (e.g. "x0" on success, "x1" on failure). This way the marker
-  #   acts both as the trailing-newline guard for $(…) AND as a
-  #   side-channel for the real backend status.
+  # Run wl-paste, append a sentinel byte,
+  # then read its true exit status from a temp variable
+  # so $() does not lose it.
   raw="$(
     "$@"
     printf 'x%d' "$?"
   )"
 
-  # Recover wl-paste's exit code:
+  # Recover the wl-paste exit code:
   # everything after the LAST 'x' in the captured output is the rc,
   # and everything before that 'x' is the real clipboard payload.
   exit_code="${raw##*x}"
@@ -294,27 +363,86 @@ function __ps_read_wl_paste() {
 #
 # Arguments:
 #   [-h | --help]
+#   [--type MIME | --json | --image[=FORMAT]]
 #
 # Returns:
 #   0: On success.
 #   Non-zero: On error (see header for code list).
 #######################################
 function past() {
+  local mime_type=''
+  # When MIME is binary, we bypass the trailing-newline workaround
+  # because it would corrupt the payload.
+  local -i is_binary_mime=0
+
   # region Argument parsing
   #
-  # past has no options other than --help, so we only need a small
-  # guard: anything other than -h/--help (or no args at all) goes
-  # straight to the read path; an unknown positional argument is a
-  # usage error rather than being silently ignored.
-  if [[ ${1-} == '-h' || ${1-} == '--help' ]]; then
-    __ps_usage
-    return 0
-  fi
+  # past has a small surface area:
+  #   -h / --help        : print usage and exit 0
+  #        --type MIME   : explicit MIME type
+  #        --json        : sugar for --type application/json
+  #        --image[=FMT] : sugar for --type image/<fmt>
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      -h | --help)
+        __ps_usage
+        return 0
+        ;;
+      --type)
+        if [[ -z ${2-} ]]; then
+          __ps_error '--type requires a MIME argument' \
+            "$PAST_ERR_USAGE" \
+            || return "$?"
+        fi
+        mime_type="$2"
+        shift 2
+        ;;
+      --type=*)
+        mime_type="${1#*=}"
+        if [[ -z $mime_type ]]; then
+          __ps_error '--type requires a MIME argument' \
+            "$PAST_ERR_USAGE" \
+            || return "$?"
+        fi
+        shift
+        ;;
+      --json | -j)
+        mime_type='application/json'
+        shift
+        ;;
+      --image)
+        mime_type='image/png'
+        shift
+        ;;
+      --image=*)
+        local -r fmt="${1#*=}"
+        if [[ -z $fmt ]]; then
+          __ps_error '--image=FORMAT requires a non-empty format' \
+            "$PAST_ERR_USAGE" \
+            || return "$?"
+        fi
+        case "$fmt" in
+          jpg | jpeg) mime_type='image/jpeg' ;;
+          png | webp | gif | bmp | tiff)
+            mime_type="image/${fmt}"
+            ;;
+          svg) mime_type='image/svg+xml' ;;
+          *) mime_type="image/${fmt}" ;;
+        esac
+        shift
+        ;;
+      *)
+        __ps_error "Unknown argument: $1" "$PAST_ERR_USAGE" \
+          || return "$?"
+        ;;
+    esac
+  done
 
-  if [[ -n ${1-} ]]; then
-    __ps_error "Unknown argument: $1" "$PAST_ERR_USAGE" \
-      || return "$?"
-  fi
+  case "$mime_type" in
+    image/* | application/octet-stream)
+      is_binary_mime=1
+      ;;
+  esac
   # endregion
 
   # region Backend resolution
@@ -322,6 +450,7 @@ function past() {
   # `cmd || rc=$?` keeps $? readable; `if ! cmd` would clobber it.
   local -a clipboard_backend_cmd
   local -i _detect_rc=0
+
   __ps_detect_backend clipboard_backend_cmd || _detect_rc=$?
 
   if [[ $_detect_rc -ne 0 ]]; then
@@ -337,15 +466,23 @@ function past() {
       "$PAST_ERR_NO_BACKEND" \
       || return "$?"
   fi
+
+  if [[ -n $mime_type ]]; then
+    __ps_apply_mime clipboard_backend_cmd "$mime_type" \
+      || return "$?"
+  fi
   # endregion
 
   # region Read clipboard
   #
-  # wl-paste needs the trailing-newline workaround,
+  # wl-paste needs the trailing-newline workaround for text payloads,
   # so it goes through __ps_read_wl_paste.
+  # For binary MIME types
+  # (image/*, application/octet-stream),
+  # we exec wl-paste directly to preserve every byte intact.
   # xclip and xsel emit clipboard bytes verbatim,
-  # so we just exec them directly.
-  if [[ ${clipboard_backend_cmd[0]} == 'wl-paste' ]]; then
+  # so we just exec them directly in either case.
+  if [[ ${clipboard_backend_cmd[0]} == 'wl-paste' && $is_binary_mime -eq 0 ]]; then
     if ! __ps_read_wl_paste "${clipboard_backend_cmd[@]}"; then
       __ps_error 'Clipboard backend failed to read.' \
         "$PAST_ERR_BACKEND_FAILED" \
@@ -366,10 +503,9 @@ function past() {
 
 # region Execution guard
 #
-# When the file is executed directly (e.g. via /usr/local/bin/past),
-# BASH_SOURCE[0] equals $0 and we run the function.
-# When sourced (e.g. from ~/.bashrc), only the function definitions
-# become available in the shell, and nothing else happens.
+# When the file is executed directly (not sourced),
+# run the main function and propagate its exit code.
+# If sourced, do nothing (just expose past() as a function).
 if [[ ${BASH_SOURCE[0]} == "$0" ]]; then
   past "$@"
   exit "$?"

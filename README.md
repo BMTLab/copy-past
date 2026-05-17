@@ -3,49 +3,18 @@
 [![CI](https://github.com/BMTLab/copy-past/actions/workflows/ci-main.yml/badge.svg)](https://github.com/BMTLab/copy-past/actions/workflows/ci-main.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
 
-Tiny, display-server‑agnostic clipboard helpers for the terminal.
+Tiny, display-server-agnostic clipboard helpers for the terminal.
+Linux/Unix-friendly alternative to macOS `pbcopy` / `pbpaste`,
+with transparent Wayland/X11 support
+and smart MIME-type detection out of the box.
 
-> `copy` writes text to the system clipboard,
-> and `past` prints the clipboard back to stdout.
-> Together they form a Linux/Unix‑friendly alternative
-> to macOS `pbcopy` / `pbpaste`,
-> with transparent Wayland/X11 support.
-
----
-
-## Features
-
-* **Wayland & X11 support**
-
-  * Wayland: uses `wl-copy` / `wl-paste` (from `wl-clipboard`).
-  * X11: falls back to `xclip` or `xsel`.
-* **GUI‑friendly by default**
-
-  * ANSI escape sequences (colors, bold, etc.)
-    are automatically stripped before writing to the clipboard.
-  * Pasted text works correctly in any application:
-    terminal, browser, editor, or messenger.
-  * Use `--raw` (`-r`) to preserve escape codes
-    for terminal‑to‑terminal workflows.
-* **Stream‑friendly**
-
-  * `copy` reads from stdin or command‑line arguments.
-  * `past` writes directly to stdout with no extra newline.
-* **Shell‑friendly API**
-
-  * Designed to be called as plain executables
-    **or** sourced as shell functions.
-  * Exit codes are predictable and stable for scripting.
-* **Zero Python/GUI dependencies**
-
-  * Plain Bash + standard clipboard tools.
-* **Works well in both desktop sessions and TTYs**
-
-  * As long as a clipboard backend is available.
-* **Backend override**
-
-  * Set `COPY_PAST_BACKEND={wl-clipboard|xclip|xsel}`
-    to force a specific backend.
+```bash
+echo 'hello' | copy             # write to clipboard
+past                            # read from clipboard
+cat data.json | copy            # detected as application/json (jq parses it)
+cat picture.png | copy          # detected as image/png (magic bytes)
+ls --color=always | copy        # ANSI codes stripped automatically
+```
 
 > [!TIP]
 > Think of them as `pbcopy` / `pbpaste` for Linux:
@@ -53,437 +22,275 @@ Tiny, display-server‑agnostic clipboard helpers for the terminal.
 
 ---
 
+## Features
+
+| | |
+|---|---|
+| 🖥️ **Wayland & X11** | `wl-clipboard`, `xclip`, or `xsel` (auto-detected) |
+| 🎨 **GUI-friendly** | ANSI escape codes stripped before writing |
+| 🤖 **Smart MIME detection** | Auto-recognises JSON (via `jq`) and PNG/JPEG/GIF/BMP/WebP |
+| 🔒 **Predictable** | Stable exit codes, well-defined error paths |
+| 🧪 **Hermetic test suite** | 90+ bats tests, no real clipboard touched in CI |
+| 📦 **Zero dependencies** | Plain Bash + your existing clipboard backend |
+
+---
+
 ## Requirements
 
-* POSIX‑like system (Linux, BSD, WSL with X/Wayland, etc.).
-* **Bash** (the scripts rely on Bash features).
-* At least one clipboard backend installed:
-
-  * Wayland: [`wl-clipboard`](https://github.com/bugaevc/wl-clipboard) (`wl-copy`, `wl-paste`).
-  * X11: `xclip` or `xsel`.
-
-`copy` and `past` automatically detect the session type
-via `WAYLAND_DISPLAY` / `XDG_SESSION_TYPE`,
-and pick the best available backend.
+* POSIX-like system (Linux, BSD, WSL with X/Wayland).
+* **Bash** 4.3 or newer.
+* At least one clipboard backend:
+  * Wayland: [`wl-clipboard`](https://github.com/bugaevc/wl-clipboard)
+  * X11: `xclip` or `xsel`
+* Optional: `jq` (enables automatic JSON detection).
 
 ---
 
 ## Installation
 
-Assuming you have cloned or downloaded the repository
-that contains `copy.sh` and `past.sh`.
-
-### Quick install (Makefile)
-
 ```bash
-make install              # symlinks copy/past into /usr/local/bin (sudo)
-make uninstall            # removes the symlinks
-make install PREFIX=~/.local  # custom prefix
+make install                       # symlinks into /usr/local/bin (sudo)
+make install PREFIX=~/.local       # user-local install
+make uninstall                     # remove symlinks
 ```
 
-### Manual install
-
-#### 1. Make the scripts executable
+Or do it by hand:
 
 ```bash
 chmod +x copy.sh past.sh
+sudo ln -s "$PWD/copy.sh" /usr/local/bin/copy
+sudo ln -s "$PWD/past.sh" /usr/local/bin/past
 ```
 
-#### 2. Install on your `$PATH`
-
-You can either **rename** the scripts
-or create **symlinks**
-to expose short command names (`copy` and `past`).
-
-##### Option A: rename and move
-
-```bash
-mv copy.sh copy
-mv past.sh past
-chmod +x copy past
-sudo mv copy past /usr/local/bin/
-```
-
-##### Option B: symlink from your project directory
-
-```bash
-chmod +x /path/to/copy.sh /path/to/past.sh
-ln -s /path/to/copy.sh /usr/local/bin/copy
-ln -s /path/to/past.sh /usr/local/bin/past
-```
-
-Make sure `/usr/local/bin` is listed in your `$PATH`.
-
-> [!TIP]
-> You can also `source` the scripts in your `~/.bashrc`
-> and use the functions directly:
->
-> ```bash
-> source /path/to/copy.sh
-> source /path/to/past.sh
-> ```
+You can also `source` them in your `~/.bashrc`
+to use `copy` and `past` as shell functions.
 
 ---
 
 ## Quick start
 
-With the commands available as `copy` and `past`:
-
 ```bash
-# Copy literal text
-copy 'Hello from the terminal!'
+# ─── Text ────────────────────────────────────────────
+copy 'Hello world'                  # argument mode
+pwd | copy                          # pipe mode
+ls --color=always | copy            # colors stripped automatically
+ls --color=always | copy --raw      # keep ANSI codes
+echo '  spaced  ' | copy --trim     # strip surrounding whitespace
+date | copy --append                # append to existing clipboard
 
-# Copy current working directory path
-pwd | copy
+# ─── JSON ────────────────────────────────────────────
+cat data.json | copy                # auto-detected (needs jq)
+cat data.json | copy --json         # explicit, skips jq parsing
+echo '{"looks": "like JSON"}' \
+  | copy --no-auto                  # force text/plain
 
-# Copy colored command output (colors are stripped automatically)
-ls --color=always | copy
+# ─── Images ──────────────────────────────────────────
+cat picture.png | copy              # auto-detected as image/png
+grim -g "$(slurp)" - | copy         # screenshot in clipboard
+past --image > screenshot.png       # save image from clipboard
 
-# Paste clipboard content into the terminal
-past
-
-# Use clipboard content inside another command
-cd "$(past)"
+# ─── Reading ─────────────────────────────────────────
+past                                # print to stdout
+cd "$(past)"                        # use clipboard inline
+past | jq .                         # pipe to another tool
 ```
 
 <img width="877" height="388" alt="Screenshot_20251123_175944" src="https://github.com/user-attachments/assets/03ec4386-4a83-42e7-93fe-d4f1f5d0dee6" />
 
 > [!NOTE]
-> Both tools operate on the **CLIPBOARD** selection
+> Both tools use the **CLIPBOARD** selection
 > (the one that survives between apps),
-> not the primary X11 selection.
+> not the X11 PRIMARY selection.
 
 ---
 
-## `copy` — write to clipboard
+## Reference
 
-`copy` takes text from **stdin** or from **arguments**,
-and writes it to the system clipboard.
+### `copy`: write to clipboard
 
-### Syntax
-
-```bash
+```
 copy [options] [text...]
-
-# or
-
 echo 'text' | copy
 ```
 
-If data is piped in via stdin,
-that stream **takes precedence** over any arguments.
+When stdin is piped in,
+it takes precedence over arguments.
 
-### Options
+#### Options
 
-| Option         | Description                                              |
-| -------------- | -------------------------------------------------------- |
-| `-h`, `--help` | Show inline help and exit.                               |
-| `-r`, `--raw`  | Preserve ANSI escape sequences (do not strip colors).    |
-| `--`           | End of options; treat remaining arguments as text input. |
+| Option              | Description                                              |
+| ------------------- | -------------------------------------------------------- |
+| `-h`, `--help`      | Show inline help and exit.                               |
+| `-r`, `--raw`       | Preserve ANSI escape sequences.                          |
+| `-a`, `--append`    | Append to the existing clipboard content (text only).    |
+| `--trim`            | Trim leading/trailing whitespace (text only).            |
+| `--type MIME`       | Set the clipboard MIME type explicitly.                  |
+| `-j`, `--json`      | Shortcut for `--type application/json --raw`.            |
+| `--image[=FORMAT]`  | Copy binary image data; default `png`.                   |
+| `--no-auto`         | Disable automatic MIME detection.                        |
+| `--`                | End of options; remaining arguments are text.            |
 
-### Behaviour
+#### Automatic MIME detection
 
-* **ANSI stripping (default)**
+`copy` inspects the first bytes of the payload by default:
 
-  By default, `copy` removes ANSI escape sequences
-  (colors, bold, underline, cursor movement)
-  before writing to the clipboard.
-  This ensures that Ctrl+V in GUI applications
-  (browsers, editors, messengers)
-  produces clean, readable text.
+* **PNG / JPEG / GIF / BMP / WebP** are detected by magic bytes.
+  These signatures cannot occur in plain text by design,
+  so the detection has no false-positive risk.
+* **JSON** is detected when the payload starts with `{` or `[`
+  **and** parses cleanly with `jq`.
+  Without `jq` the JSON path is skipped silently.
+* Anything else is copied as plain text.
 
-  ```bash
-  # Colored ls output → clean file list in clipboard
-  ls --color=always /etc | copy
-
-  # cdl output → clean listing in clipboard
-  cdl ~/projects | copy
-  ```
-
-  To preserve escape codes
-  (e.g. for pasting back into a terminal),
-  use `--raw`:
-
-  ```bash
-  ls --color=always | copy --raw
-  ```
-
-* **Pipe mode (recommended for scripts)**
-
-  ```bash
-  echo 'some text' | copy
-  journalctl -n 100 | copy
-  ```
-
-  `copy` reads stdin until EOF,
-  and passes it (after ANSI stripping) to the backend tool.
-  It does **not** append a newline on its own.
-
-* **Argument mode (interactive convenience)**
-
-  ```bash
-  copy Hello world
-  copy 'line 1' 'line 2'
-  ```
-
-  Arguments are joined with single spaces (similar to `echo "$*"`).
-  The result is then sent to the backend.
-
-### Exit codes
-
-| Code | Constant                  | Meaning                                                |
-| ---- | ------------------------- | ------------------------------------------------------ |
-| `0`  | -                         | Success.                                               |
-| `1`  | `COPY_ERR_GENERAL`        | Generic error.                                         |
-| `2`  | `COPY_ERR_USAGE`          | Invalid usage, unknown option, or unknown backend.     |
-| `3`  | `COPY_ERR_NO_BACKEND`     | No suitable clipboard utility found.                   |
-| `4`  | `COPY_ERR_BACKEND_FAILED` | Backend tool (or ANSI-strip stage) returned non‑zero.  |
+An explicit `--type` / `--json` / `--image`
+always wins over auto-detection,
+and `--no-auto` disables it entirely.
 
 > [!IMPORTANT]
 > When copying **secrets** (tokens, passwords),
-> prefer **pipe mode**: `printf '%s' "$TOKEN" | copy`.
-> Passing secrets as arguments (e.g. `copy my-secret`)
-> may leak them into shell history and process lists.
+> prefer pipe mode: `printf '%s' "$TOKEN" | copy`.
+> Passing secrets as arguments may leak them
+> into shell history and process lists.
 
----
+#### Exit codes
 
-## `past` — read from clipboard
+| Code | Constant                  | Meaning                                          |
+| ---- | ------------------------- | ------------------------------------------------ |
+| `0`  | (none)                    | Success.                                         |
+| `1`  | `COPY_ERR_GENERAL`        | Generic error.                                   |
+| `2`  | `COPY_ERR_USAGE`          | Invalid usage or unknown option.                 |
+| `3`  | `COPY_ERR_NO_BACKEND`     | No suitable clipboard utility found.             |
+| `4`  | `COPY_ERR_BACKEND_FAILED` | Backend tool returned non-zero.                  |
+| `5`  | `COPY_ERR_TYPE_MISMATCH`  | Incompatible options or unsupported MIME type.   |
 
-`past` prints the current clipboard contents to stdout,
-without altering it.
+### `past`: read from clipboard
 
-### Syntax
-
-```bash
-past
-past --help
+```
+past [options]
 ```
 
-Typical patterns:
+Prints clipboard contents to stdout, without altering them.
+Does not append a trailing newline beyond what is already there.
 
-```bash
-# Save clipboard to a file
-past > clipboard.txt
+#### Options
 
-# Use clipboard in a command substitution
-echo "Clipboard: $(past)"
+| Option              | Description                                       |
+| ------------------- | ------------------------------------------------- |
+| `-h`, `--help`      | Show inline help and exit.                        |
+| `--type MIME`       | Request a specific MIME type from the backend.    |
+| `-j`, `--json`      | Shortcut for `--type application/json`.           |
+| `--image[=FORMAT]`  | Read binary image data; default `png`.            |
 
-# Pipe clipboard through another tool
-past | jq .
-```
+#### Exit codes
 
-### Options
-
-| Option         | Description                |
-| -------------- | -------------------------- |
-| `-h`, `--help` | Show inline help and exit. |
-
-### Behaviour
-
-* Uses the same backend selection logic as `copy`:
-
-  * `wl-paste` on Wayland
-    (with a workaround for the `--no-newline` bug in wl-clipboard ≤ 2.2.1).
-  * `xclip -selection clipboard -out`
-    or `xsel --clipboard --output` on X11.
-* Does **not** append any trailing newline
-  beyond what is already in the clipboard.
-
-### Exit codes
-
-| Code | Constant                  | Meaning                              |
-| ---- | ------------------------- | ------------------------------------ |
-| `0`  | -                         | Success.                             |
-| `1`  | `PAST_ERR_GENERAL`        | Generic error.                       |
-| `2`  | `PAST_ERR_USAGE`          | Invalid usage or unknown backend.    |
-| `3`  | `PAST_ERR_NO_BACKEND`     | No suitable clipboard utility found. |
-| `4`  | `PAST_ERR_BACKEND_FAILED` | Backend tool returned non‑zero.      |
+| Code | Constant                  | Meaning                                          |
+| ---- | ------------------------- | ------------------------------------------------ |
+| `0`  | (none)                    | Success.                                         |
+| `1`  | `PAST_ERR_GENERAL`        | Generic error.                                   |
+| `2`  | `PAST_ERR_USAGE`          | Invalid usage or unknown argument.               |
+| `3`  | `PAST_ERR_NO_BACKEND`     | No suitable clipboard utility found.             |
+| `4`  | `PAST_ERR_BACKEND_FAILED` | Backend tool returned non-zero.                  |
+| `5`  | `PAST_ERR_TYPE_MISMATCH`  | Backend cannot handle the requested MIME type.   |
 
 ---
 
 ## Backend override
 
-Both scripts honour the `COPY_PAST_BACKEND` environment variable.
-Set it to `wl-clipboard`, `xclip`, or `xsel`
-to bypass auto-detection
-and force a specific backend.
+Both scripts honour the `COPY_PAST_BACKEND` environment variable:
 
 ```bash
-# Force xclip even on a Wayland session
-COPY_PAST_BACKEND=xclip ls | copy
-
-# Persistent override for a shell session
-export COPY_PAST_BACKEND=wl-clipboard
+COPY_PAST_BACKEND=xclip ls | copy        # one-shot override
+export COPY_PAST_BACKEND=wl-clipboard    # whole shell session
 ```
 
-Unknown values are rejected
-with `COPY_ERR_USAGE` / `PAST_ERR_USAGE` (exit code 2).
+Accepted values: `wl-clipboard` (or `wayland`), `xclip`, `xsel`.
+Unknown values fail with `COPY_ERR_USAGE` / `PAST_ERR_USAGE`.
+
+> [!NOTE]
+> `xsel` does not support MIME types,
+> so non-text payloads (`--json`, `--image`)
+> need `wl-clipboard` or `xclip`.
 
 ---
 
-## Using `copy` and `past` together
-
-Because both tools talk to the same clipboard,
-they combine well:
+## Recipes
 
 ```bash
-# Copy some text
-printf 'some text' | copy
-
-# Paste it back into another command
-printf 'You copied: %s\n' "$(past)"
-
-# Round-trip through a transformation
+# Round-trip transformation
 past | tr 'a-z' 'A-Z' | copy
 
-# Yank a path once and reuse it many times
-ls | fzf | copy     # choose a path
-cd "$(past)"        # jump there later
+# Yank from fzf, jump to it later
+ls | fzf | copy
+cd "$(past)"
 
-# Copy colored output, paste clean text in GUI
-cdl ~/projects | copy
-# Now Ctrl+V in any app gives you a clean directory listing
-```
+# Save clipboard image to a file
+past --image > clipboard.png
 
-You can also integrate them into aliases or shell functions,
-for example:
+# Append output of multiple commands
+grep ERROR app1.log | copy
+grep ERROR app2.log | copy --append
+past > all-errors.log
 
-```bash
+# Useful aliases
 alias cpath='pwd | copy'
-alias pp='echo "$(past)"'
+alias cline='copy < /dev/stdin'
 ```
 
 ---
 
 ## Troubleshooting
 
-* **"No clipboard backend found"**
+**No clipboard backend found**
+Install one of `wl-clipboard`, `xclip`, or `xsel`,
+and make sure it is on `$PATH`.
 
-  * Install one of:
+**Pasted text contains garbage like `[31m`**
+You are likely passing `--raw` or relying on an older release.
+Drop the flag: `copy` strips ANSI codes by default.
 
-    * Wayland: `wl-clipboard` (`wl-copy`, `wl-paste`).
-    * X11: `xclip` or `xsel`.
-  * Make sure the tools are in your `$PATH`.
+**Last line missing from clipboard**
+Known bug in `wl-clipboard ≤ 2.2.1` with `--no-newline`.
+`past` ships a workaround; no action needed on your side.
 
-* **Pasted text contains garbage characters (e.g. `[31m`)**
-
-  * You are likely using `copy --raw`,
-    or an older version without ANSI stripping.
-  * Run `copy` without `--raw`
-    to strip escape sequences automatically.
-
-* **Last line missing from clipboard**
-
-  * This is a known bug in `wl-clipboard ≤ 2.2.1` with `--no-newline`.
-  * `past` includes a workaround,
-    so no action is needed on your part.
-
-* **Running over SSH**
-
-  * Clipboard access usually targets the **remote** display/session.
-    You may need extra configuration
-    (X11 forwarding, Wayland remoting,
-    or an SSH tunnel to a local clipboard service).
-
-* **Clipboard managers (KDE Klipper, GNOME, etc.)**
-
-  * These tools work fine alongside clipboard managers:
-    they simply populate the CLIPBOARD selection,
-    which managers then track.
+**Running over SSH**
+Clipboard access targets the remote session by default.
+For local clipboard, configure X11 forwarding,
+Wayland remoting, or an SSH tunnel
+to a local clipboard service.
 
 ---
 
-## Development & testing
-
-The project ships a [bats-core](https://bats-core.readthedocs.io/) test suite
-that exercises both scripts
-against a hermetic fake clipboard backend
-(no real clipboard is touched).
+## Development
 
 ```bash
-make test             # run the full bats suite
-make lint             # shellcheck on copy.sh / past.sh
-make format           # apply shfmt formatting in-place
-make check            # lint + test (CI gate)
+make check         # lint + format-check + tests (CI gate)
+make test          # bats suite only
+make lint          # shellcheck only
+make format        # rewrite scripts with shfmt
+make check-deps    # show runtime + dev tooling status
 ```
-
-Required dev tools:
-
-* `bats` (≥ 1.5.0)
-* `shellcheck`
-* `shfmt`
-* `xxd` (used by tests for byte-level fidelity checks)
 
 Test layout:
 
 ```
 tests/bats/
 ├── test_helper.bash       # shared fake-backend setup
-├── test_copy.bats         # copy.sh behaviour, options, errors
-├── test_past.bats         # past.sh behaviour, errors
+├── test_copy.bats         # copy options & error paths
+├── test_past.bats         # past options & error paths
+├── test_features.bats     # append / trim / json / image / auto-detect
 ├── test_roundtrip.bats    # copy → past byte-fidelity
-├── test_robustness.bats   # regression tests for v1.2.0 fixes
-└── test_code_style.bats   # shellcheck / shfmt / header checks
+├── test_robustness.bats   # regression tests
+└── test_code_style.bats   # shellcheck / shfmt / header gate
 ```
 
----
-
-## License & disclaimer
-
-This project is licensed under the [MIT License](./LICENSE).
-
-> [!NOTE]
-> The scripts are provided **as is**,
-> without any warranty of correctness
-> or fitness for a particular purpose.
-> Always verify clipboard contents in security‑sensitive workflows.
+See [CONTRIBUTING.md](./CONTRIBUTING.md) for the code style,
+commit conventions, and release process.
 
 ---
 
-## Contributing
+## License
 
-Issues and pull requests are welcome.
-If you propose enhancements (new flags, additional backends, etc.),
-please include concrete examples and a short rationale,
-so the tools stay small, focused,
-and easy to reason about :innocent:
+[MIT](./LICENSE).
 
-### Commit message format
-
-This project uses
-[Conventional Commits](https://www.conventionalcommits.org/)
-together with
-[release-please](https://github.com/googleapis/release-please)
-to automate versioning and changelog generation.Common prefixes:
-
-- `feat: …` — new user-visible behaviour (minor bump)
-- `fix: …` — bug fix (patch bump)
-- `feat!: …` or `BREAKING CHANGE:` in body — major bump
-- `chore: …`, `docs: …`, `refactor: …` — no version bump
-
-When commits with `feat:` / `fix:` reach `main`,
-release-please opens a PR with an updated `CHANGELOG.md`
-and bumped `Version:` headers in `copy.sh` / `past.sh` / `Makefile`.
-Merging that PR creates a `vX.Y.Z` git tag,
-which triggers the release workflow:
-the tarball is built, signed via sigstore,
-and attached to the auto-generated GitHub Release.
-
-#### Repo setup checklist (one-time)
-
-For the release automation to work end-to-end,
-the following has to be configured in the GitHub UI:
-
-* **Settings → Actions → General → Workflow permissions:**
-  enable **"Allow GitHub Actions to create and approve pull requests"**.
-  Without this flag,
-  release-please cannot open the release PR
-  even though the workflow YAML grants `pull-requests: write`.
-* **Settings → Secrets and variables → Actions:**
-  add `RELEASE_PLEASE_TOKEN`
-  (a fine-grained PAT or a GitHub App installation token
-  with `Contents: write` + `Pull requests: write` on this repo).
-  Without this secret the action falls back to `GITHUB_TOKEN`,
-  which can still open the PR and create the tag,
-  but the tag push will not trigger the build pipeline
-  (GitHub deliberately blocks recursion for default-token tags).
+The scripts are provided **as is**, without warranty of any kind.
+Always verify clipboard contents in security-sensitive workflows.

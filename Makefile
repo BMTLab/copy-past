@@ -10,7 +10,7 @@
 
 # ─── Project metadata ────────────────────────────────────────────────────
 PROJECT_NAME    := copy-past
-PROJECT_VERSION := 1.2.0 # x-release-please-version
+PROJECT_VERSION := 1.4.0 # x-release-please-version
 SCRIPTS         := copy.sh past.sh
 
 
@@ -149,6 +149,8 @@ version:  ## Print the project version (machine-readable)
 RUNTIME_TOOLS      := bash sed
 # At least one of these is required for the scripts to function.
 CLIPBOARD_BACKENDS := wl-copy xclip xsel
+# Optional; presence enables the automatic JSON detection in `copy`.
+OPTIONAL_TOOLS     := jq
 # Required only by `make check` / `make test`.
 DEV_TOOLS          := bats shellcheck shfmt xxd
 
@@ -176,6 +178,14 @@ check-deps:  ## Check runtime + dev tooling availability
 	if [ $$found_backend -eq 0 ]; then \
 		printf '    $(C_YELLOW)!$(C_RESET) no clipboard backend installed\n'; \
 	fi; \
+	printf '\n  $(C_BOLD)Optional$(C_RESET) $(C_DIM)(extra features)$(C_RESET)\n'; \
+	for t in $(OPTIONAL_TOOLS); do \
+		if command -v "$$t" > /dev/null 2>&1; then \
+			printf '    $(C_GREEN)✓$(C_RESET) %s $(C_DIM)(enables JSON auto-detection)$(C_RESET)\n' "$$t"; \
+		else \
+			printf '    $(C_DIM)·$(C_RESET) %s $(C_DIM)(install for JSON auto-detection)$(C_RESET)\n' "$$t"; \
+		fi; \
+	done; \
 	printf '\n  $(C_BOLD)Dev tooling$(C_RESET)\n'; \
 	missing_dev=0; \
 	for t in $(DEV_TOOLS); do \

@@ -230,7 +230,7 @@ setup() {
 
   # Assert
   [ "$status" -eq 0 ]
-  [[ "$output" == *'copy - write text to system clipboard'* ]]
+  [[ "$output" == *'copy - write'*'system clipboard'* ]]
   [[ "$output" == *'--raw'* ]]
 }
 
@@ -242,7 +242,7 @@ setup() {
 
   # Assert
   [ "$status" -eq 0 ]
-  [[ "$output" == *'copy - write text to system clipboard'* ]]
+  [[ "$output" == *'copy - write'*'system clipboard'* ]]
 }
 
 @test "-- terminates option parsing; subsequent args are text" {
