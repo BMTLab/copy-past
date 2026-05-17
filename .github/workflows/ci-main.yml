@@ -1,0 +1,104 @@
+# .github/workflows/ci-main.yml
+#
+# Orchestrates the repository CI.
+# Routes work to reusable workflows:
+#   - ci-lint.yml          : shellcheck + shfmt + custom style gates
+#   - ci-workflow-lint.yml : actionlint via reviewdog
+#   - ci-test.yml          : bats matrix on Linux & macOS,
+#                            across multiple bash versions
+#   - ci-release.yml       : tarball + GitHub Release on version tags
+#
+
+name: Main CI
+
+on:
+  pull_request:
+    branches: &tracked-branches
+      - main
+      - release
+      - dev
+    paths-ignore: &paths-ignore
+      - '**/*.txt'
+      - '.gitignore'
+      - '.gitattributes'
+      - '.github/dependabot.yml'
+      - '.github/CODEOWNERS'
+      - '.github/ISSUE_TEMPLATE/**'
+      - '.github/pull_request_template.md'
+      - 'LICENSE'
+      - 'CODE_OF_CONDUCT.md'
+      - 'SECURITY.md'
+      - 'CONTRIBUTING.md'
+      # release-please owns these files exclusively;
+      # bumping them never affects the build.
+      - 'CHANGELOG.md'
+      - 'release-please-config.json'
+      - '.release-please-manifest.json'
+
+  push:
+    branches: *tracked-branches
+    tags:
+      - 'v*.*.*'
+    paths-ignore: *paths-ignore
+
+  workflow_dispatch:
+
+# Concurrency control:
+#   - For pull requests, cancel any ongoing runs for the same PR.
+#   - For pushes to a branch, cancel any ongoing runs
+#     for the same branch.
+# This ensures that only the latest commit is being tested.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+# Set default, read-only permissions for all jobs in this workflow.
+# This establishes a secure-by-default baseline,
+# following the principle of least privilege.
+# Any job that needs more permissions
+# must override this block explicitly.
+permissions:
+  contents: read
+
+jobs:
+
+  lint:
+    name: 🧹 Lint & Style
+    uses: ./.github/workflows/ci-lint.yml
+    permissions:
+      contents: read
+      checks: write
+      pull-requests: write
+
+  workflow-lint:
+    name: 🪝 Workflow Lint
+    uses: ./.github/workflows/ci-workflow-lint.yml
+    permissions:
+      contents: read
+      checks: write
+      pull-requests: write
+
+  test:
+    name: 🧪 Tests
+    uses: ./.github/workflows/ci-test.yml
+    permissions:
+      contents: read
+      checks: write
+
+  release:
+    name: 🛳️ Release
+    needs:
+      - lint
+      - workflow-lint
+      - test
+    if: >-
+      ${{ github.actor != 'dependabot[bot]'
+      && github.event_name == 'push'
+      && startsWith(github.ref, 'refs/tags/v') }}
+    uses: ./.github/workflows/ci-release.yml
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    with:
+      version: ${{ github.ref_name }}

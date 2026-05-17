@@ -1,0 +1,405 @@
+# .github/workflows/ci-test.yml
+#
+# Runs the bats suite against:
+#   - Linux: Ubuntu 22.04 + Ubuntu 24.04
+#     (different bash versions)
+#   - macOS: macos-14 (Apple Silicon)
+# This verifies that the scripts work
+# on the most common dev/CI hosts.
+#
+# Each matrix leg also runs a real-clipboard smoke test
+# where possible:
+#   - on Linux we install xclip + xvfb-run
+#     for a virtual X11 display;
+#   - on macOS we use the system pbcopy/pbpaste shim
+#     when available.
+#
+# The fake-backend bats suite remains the primary gate;
+# the real-backend smoke is opportunistic
+# and skipped automatically when unavailable.
+
+name: Tests CI
+
+on:
+  workflow_call:
+
+jobs:
+  bats:
+    name: bats / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+
+    permissions:
+      contents: read
+      checks: write
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            install: apt
+          - os: ubuntu-24.04
+            install: apt
+          - os: macos-14
+            install: brew
+
+    env:
+      BATS_VERSION: v1.11.0
+      BATS_RESULTS_DIR: ./bats-results
+      ### Exit codes
+      ### (kept here so they stay uniform across all steps)
+      ERR_BATS_INSTALL: 11
+      ERR_SMOKE_MISMATCH: 12
+
+    steps:
+      - name: ⚙️ Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+          # The job only reads the workspace,
+          # so we do not need a persisted token.
+          # Disabling it removes one potential leak surface
+          # for upload-artifact and cache steps later in the matrix.
+          persist-credentials: false
+
+      # ─── Tool installation per platform ──────────────────────
+      #
+      # We install bats-core from git (pinned tag), not from apt.
+      #
+      # Reason:
+      #   apt on Ubuntu 22.04 ships bats 1.2.1,
+      #   which lacks `--report-formatter`
+      #   and `bats_require_minimum_version`,
+      #   both of which the suite depends on.
+      #   Building from source is a 10-line install
+      #   and gives us the same version on every runner.
+      - name: 🔧 Install bats + xxd (Linux)
+        if: ${{ matrix.install == 'apt' }}
+        run: |
+          set -o errexit -o nounset -o pipefail
+
+          #######################################
+          # Print error message to stderr
+          # and return the given code.
+          #
+          # Arguments:
+          #   1: human-readable error message.
+          #   2: exit code (defaults to ERR_BATS_INSTALL).
+          # Outputs:
+          #   Annotated error to stderr
+          #   (picked up by the GitHub UI).
+          #######################################
+          function ci_error() {
+            local -r message="$1"
+            local -ir code="${2:-$ERR_BATS_INSTALL}"
+
+            echo "::error title=Lint setup::$message" >&2
+            return "$code"
+          }
+
+          #######################################
+          # Install runtime tooling via apt
+          # (xxd, xclip, xvfb, bsdutils).
+          #######################################
+          function install_runtime_tools() {
+            echo '::group::apt-get install (xxd, xclip, xvfb, bsdutils)'
+            sudo apt-get update -qq
+            sudo apt-get install -y --no-install-recommends \
+              xxd \
+              xclip \
+              xvfb \
+              bsdutils
+            echo '::endgroup::'
+          }
+
+          #######################################
+          # Build and install bats-core from a pinned git tag.
+          #
+          # Arguments:
+          #   1: git tag (e.g. 'v1.11.0').
+          #   2: install prefix (e.g. '/usr/local').
+          # Returns:
+          #   Non-zero on clone or install failure.
+          #######################################
+          function install_bats_from_source() {
+            local -r tag="$1"
+            local -r prefix="$2"
+
+            echo "::group::Install bats-core ${tag} into ${prefix}"
+
+            local tmp
+            tmp="$(mktemp -d)"
+            if ! git clone \
+              --depth 1 \
+              --branch "$tag" \
+              https://github.com/bats-core/bats-core.git "$tmp"; then
+              rm -rf -- "$tmp"
+              ci_error "git clone bats-core@${tag} failed" \
+                || return "$?"
+            fi
+
+            if ! sudo "$tmp/install.sh" "$prefix"; then
+              rm -rf -- "$tmp"
+              ci_error 'bats-core install.sh failed' \
+                || return "$?"
+            fi
+
+            rm -rf -- "$tmp"
+            echo '::endgroup::'
+          }
+
+          install_runtime_tools
+          install_bats_from_source "$BATS_VERSION" /usr/local
+
+      - name: 🔧 Install bats + xxd (macOS)
+        if: ${{ matrix.install == 'brew' }}
+        run: |
+          set -o errexit -o nounset -o pipefail
+
+          # `xxd` ships with macOS by default;
+          # bats-core via Homebrew is reliably current (>= 1.10).
+          echo '::group::brew install bats-core'
+          brew install bats-core
+          echo '::endgroup::'
+
+      - name: ℹ️ Environment
+        run: |
+          echo '::group::Versions'
+          uname -a
+          bash --version | head -n1
+          bats --version
+          xxd --version 2>&1 | head -n1 || true
+          echo '::endgroup::'
+
+      # ─── Primary gate: hermetic bats suite ───────────────────
+      - name: 🧪 Run bats (hermetic, fake backend)
+        run: |
+          set -o errexit -o nounset -o pipefail
+
+          # Force-clear any stray override
+          # that might survive in the runner image
+          # (defensive; setup() also unsets it).
+          unset COPY_PAST_BACKEND
+
+          # bats requires the `--output` directory to exist
+          # before it writes the JUnit report there.
+          mkdir -p "$BATS_RESULTS_DIR"
+
+          # `--report-formatter junit` writes machine-readable XML
+          # alongside the human-readable TAP output,
+          # so the GitHub UI can render the per-test status natively.
+          bats \
+            --report-formatter junit \
+            --output "$BATS_RESULTS_DIR" \
+            tests/bats/
+
+      # ─── Optional: real-backend smoke test ───────────────────
+      #
+      # Linux: spin up a virtual X11 display via xvfb-run,
+      # run a tiny round-trip through real xclip,
+      # and assert byte fidelity.
+      - name: 🌀 Real-backend smoke (Linux + xvfb + xclip)
+        if: ${{ runner.os == 'Linux' }}
+        run: |
+          set -o errexit -o nounset -o pipefail
+
+          #######################################
+          # Print an annotated error to stderr.
+          #######################################
+          function smoke_error() {
+            local -r message="$1"
+            local -ir code="${2:-$ERR_SMOKE_MISMATCH}"
+
+            echo "::error title=Real-backend smoke::$message" >&2
+            return "$code"
+          }
+
+          #######################################
+          # Run a round-trip against the real xclip backend
+          # under an xvfb display.
+          #
+          # The inner script is launched with `bash -c`
+          # so that `$payload` and friends expand at run time,
+          # not when we render this YAML.
+          # Hence the shellcheck disable below.
+          # shellcheck disable=SC2016
+          #######################################
+          function run_xvfb_round_trip() {
+            xvfb-run -a bash -c '
+              unset WAYLAND_DISPLAY XDG_SESSION_TYPE
+              export COPY_PAST_BACKEND=xclip
+
+              payload=$(printf "real\nbackend\nsmoke")
+              printf "%s" "$payload" | bash copy.sh
+
+              received="$(bash past.sh; printf x)"
+              received="${received%x}"
+
+              if [[ "$received" != "$payload" ]]; then
+                echo "::error title=Real-backend smoke::round-trip mismatch" >&2
+                printf "expected: %q\n" "$payload" >&2
+                printf "received: %q\n" "$received" >&2
+                exit 1
+              fi
+              echo "::notice title=Real-backend smoke::xclip round-trip ok"
+            '
+          }
+
+          echo '::group::Real-clipboard round-trip'
+          if ! run_xvfb_round_trip; then
+            echo '::endgroup::'
+            smoke_error 'xvfb+xclip round-trip failed' \
+              || exit "$?"
+          fi
+          echo '::endgroup::'
+
+      # macOS does not ship wl-clipboard, xclip, or xsel by default,
+      # and Homebrew xclip on macOS is non-functional without XQuartz.
+      # We skip the real-backend smoke there;
+      # the hermetic suite still validates all logic paths.
+      - name: 🌀 Real-backend smoke (macOS)
+        if: ${{ runner.os == 'macOS' }}
+        run: echo '::notice::Real-backend smoke skipped on macOS (no clipboard tool installed)'
+
+      # ─── Artifacts & summary ─────────────────────────────────
+      - name: 📤 Upload bats results
+        if: ${{ always() }}
+        id: upload-results
+        uses: actions/upload-artifact@v7
+        with:
+          name: bats-results-${{ matrix.os }}
+          path: ${{ env.BATS_RESULTS_DIR }}/**
+          if-no-files-found: warn
+          retention-days: 14
+          # `overwrite: true` makes workflow re-runs idempotent.
+          # Without it, the second run on the same SHA would fail
+          # with "an artifact with this name already exists".
+          overwrite: true
+          # JUnit XML compresses well; the default level is fine,
+          # but we set it explicitly so future tooling changes
+          # do not silently regress to a slower default.
+          compression-level: 6
+
+      - name: 📊 Summary
+        if: ${{ always() }}
+        env:
+          MATRIX_OS: ${{ matrix.os }}
+          ARTIFACT_URL: ${{ steps.upload-results.outputs.artifact-url }}
+          ARTIFACT_ID: ${{ steps.upload-results.outputs.artifact-id }}
+          ARTIFACT_DIGEST: ${{ steps.upload-results.outputs.artifact-digest }}
+        run: |
+          set -o errexit -o nounset -o pipefail
+
+          #######################################
+          # Extract the numeric `failures="N"` attribute
+          # from a junit XML file produced by bats.
+          #
+          # Arguments:
+          #   1: path to the XML file.
+          # Outputs (stdout):
+          #   The count as a non-negative integer
+          #   ('0' on absence).
+          #######################################
+          function junit_failures_count() {
+            local -r xml="$1"
+
+            grep -oE 'failures="[0-9]+"' "$xml" \
+              | head -n1 \
+              | grep -oE '[0-9]+' \
+              || echo 0
+          }
+
+          #######################################
+          # Render a single Markdown row for one bats file.
+          #
+          # Arguments:
+          #   1: path to the junit XML file.
+          # Outputs:
+          #   '| <name> | <status> |' on stdout.
+          #######################################
+          function render_file_row() {
+            local -r xml="$1"
+            # `tick` carries a literal backtick.
+            # Building the row by string concatenation
+            # rather than `printf '`%s`'`
+            # sidesteps a shellcheck SC2016 false positive
+            # on the format string.
+            local -r tick='`'
+
+            local name
+            name="$(basename "$xml" .xml)"
+
+            local -i failed
+            failed="$(junit_failures_count "$xml")"
+
+            if (( failed == 0 )); then
+              echo "| ${tick}${name}${tick} | ✅ |"
+            else
+              echo "| ${tick}${name}${tick} | ❌ (${failed} failed) |"
+            fi
+          }
+
+          #######################################
+          # Append an artifact-info block to the step summary,
+          # using the outputs published by upload-artifact@v7
+          # (artifact-id, artifact-url, artifact-digest).
+          # The block is skipped when no upload happened
+          # (e.g. when the bats run produced no XML files).
+          #
+          # Globals:
+          #   ARTIFACT_URL, ARTIFACT_ID, ARTIFACT_DIGEST,
+          #   GITHUB_STEP_SUMMARY (read).
+          #######################################
+          function append_artifact_block() {
+            if [[ -z "${ARTIFACT_URL:-}" ]]; then
+              return 0
+            fi
+
+            {
+              echo
+              echo '<details><summary>📦 Artifact</summary>'
+              echo
+              echo "- ID: \`${ARTIFACT_ID}\`"
+              echo "- Download: ${ARTIFACT_URL}"
+              echo "- SHA-256: \`${ARTIFACT_DIGEST}\`"
+              echo
+              echo '</details>'
+            } >> "$GITHUB_STEP_SUMMARY"
+          }
+
+          #######################################
+          # Render the full summary section
+          # for the current matrix leg.
+          #
+          # Globals:
+          #   BATS_RESULTS_DIR, MATRIX_OS,
+          #   GITHUB_STEP_SUMMARY (read).
+          #######################################
+          function main() {
+            {
+              echo "## 🧪 bats / ${MATRIX_OS}"
+              echo
+            } >> "$GITHUB_STEP_SUMMARY"
+
+            if [[ ! -d "$BATS_RESULTS_DIR" ]]; then
+              echo '⚠️ no bats results captured' \
+                >> "$GITHUB_STEP_SUMMARY"
+              return 0
+            fi
+
+            {
+              echo '| File | Status |'
+              echo '|------|--------|'
+            } >> "$GITHUB_STEP_SUMMARY"
+
+            local xml
+            for xml in "$BATS_RESULTS_DIR"/*.xml; do
+              [[ -f "$xml" ]] || continue
+              render_file_row "$xml" >> "$GITHUB_STEP_SUMMARY"
+            done
+
+            append_artifact_block
+          }
+
+          main "$@"

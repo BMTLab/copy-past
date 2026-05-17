@@ -1,0 +1,89 @@
+# .github/workflows/ci-workflow-lint.yml
+#
+# Static analysis for our own GitHub Actions workflow files.
+#
+# Runs in parallel with ci-lint.yml (shell-script lint)
+# and ci-test.yml (bats),
+# because workflow YAML and shell scripts share no dependencies
+# and there is no reason to gate one behind the other.
+#
+# We post-process actionlint findings with reviewdog,
+# which annotates each problem inline on the PR diff
+# so reviewers see the issue right next to the offending line.
+
+name: Workflow Lint CI
+
+on:
+  workflow_call:
+
+jobs:
+  workflow-lint:
+    name: Workflow Lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+
+    permissions:
+      contents: read
+      checks: write
+      pull-requests: write
+
+    steps:
+      - name: ⚙️ Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+          # The job is read-only,
+          # so we do not need a persisted token.
+          persist-credentials: false
+
+      # actionlint statically validates every workflow file
+      # under .github/workflows/.
+      # It catches issues that yaml-only linters miss:
+      #   - unknown action inputs and outputs
+      #   - misuse of expression syntax
+      #   - shellcheck warnings inside `run:` blocks
+      - name: 🪝 actionlint via reviewdog
+        uses: reviewdog/action-actionlint@v1.48.0
+        env:
+          # reviewdog uses this token to post inline review
+          # comments on pull requests.
+          # GitHub Actions exposes the workflow token as
+          # `secrets.GITHUB_TOKEN`,
+          # which has the right scopes by default
+          # because the job already declares
+          # `pull-requests: write`.
+          REVIEWDOG_GITHUB_API_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          # `github-pr-review` posts inline comments on PRs;
+          # outside PR context (push to main, scheduled),
+          # the action falls back to the runner log,
+          # so this setting is safe in every event.
+          reporter: github-pr-review
+          # `error` makes reviewdog promote any actionlint finding
+          # to an error-level annotation in the GitHub UI.
+          level: error
+          # `fail_on_error: true` makes the step exit non-zero
+          # whenever actionlint reports at least one issue,
+          # mirroring the strictness of the rest of the lint job.
+          # The newer `fail_level` input only exists on master
+          # and is not yet released in v1.48.0.
+          fail_on_error: 'true'
+
+      - name: 📊 Summary
+        if: ${{ always() }}
+        env:
+          JOB_STATUS: ${{ job.status }}
+        run: |
+          set -o errexit -o nounset -o pipefail
+
+          if [[ "$JOB_STATUS" == 'success' ]]; then
+            mark='✅'
+          else
+            mark='❌'
+          fi
+
+          {
+            echo '## 🪝 Workflow Lint'
+            echo
+            printf '| actionlint | %s |\n' "$mark"
+          } >> "$GITHUB_STEP_SUMMARY"

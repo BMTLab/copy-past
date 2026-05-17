@@ -1,0 +1,27 @@
+# .github/dependabot.yml
+#
+# Keeps third-party action versions pinned and up-to-date.
+# We pin actions to exact versions in workflow files
+# (e.g. actions/checkout@v6, not @v5),
+# so Dependabot opens a PR whenever a new version is released
+# and we can review the changelog before adopting it.
+
+version: 2
+
+updates:
+  - package-ecosystem: github-actions
+    directory: '/'
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: chore
+      include: scope
+    target-branch: dev
+    open-pull-requests-limit: 5
+    reviewers:
+      - BMTLab
+    labels:
+      - dependencies
+      - github-actions
+    assignees:
+      - BMTLab

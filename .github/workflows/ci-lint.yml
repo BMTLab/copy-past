@@ -1,0 +1,147 @@
+# .github/workflows/ci-lint.yml
+#
+# Runs shellcheck + shfmt
+# plus the custom style gates defined in tests/bats/test_code_style.bats.
+# Adds a build-info section to the run summary,
+# so reviewers can see exactly which versions of the tools produced the verdict.
+
+name: Lint & Style CI
+
+on:
+  workflow_call:
+
+jobs:
+  lint:
+    name: Lint & Style
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    permissions:
+      contents: read
+      checks: write
+      pull-requests: write
+
+    steps:
+      - name: ⚙️ Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+          # We do not push back from this job,
+          # so credentials are not needed.
+          # checkout@v6 still stores the token under $RUNNER_TEMP
+          # by default, but turning persist-credentials off
+          # eliminates the file entirely
+          # and is one less thing to worry about
+          # if the workspace is later archived or cached.
+          persist-credentials: false
+
+      # Pin tool versions:
+      # apt bash and bats are recent enough on ubuntu-latest,
+      # and shellcheck/shfmt are also packaged.
+      # We install everything via apt,
+      # so we avoid third-party actions
+      # that could be compromised or rate-limited.
+      - name: 🔧 Install lint tooling
+        run: |
+          set -o errexit -o nounset -o pipefail
+
+          echo '::group::apt-get install'
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            shellcheck \
+            shfmt \
+            bats
+          echo '::endgroup::'
+
+      - name: ℹ️ Tool versions
+        run: |
+          echo '::group::Versions'
+          bash --version | head -n1
+          shellcheck --version | head -n3
+          shfmt --version
+          bats --version
+          echo '::endgroup::'
+
+      # The Makefile encapsulates the exact lint commands used locally,
+      # so CI matches `make check` byte-for-byte.
+      - name: 🔍 shellcheck
+        run: make lint
+
+      - name: 🎨 shfmt
+        run: make format-check
+
+      # Runs ONLY the style-gate bats file,
+      # which checks the cdl-style header convention,
+      # the presence of Version/Date,
+      # and the shfmt diff (idempotency check).
+      - name: 🧪 Custom style gate (bats)
+        run: bats tests/bats/test_code_style.bats
+
+      - name: 📊 Summary
+        if: ${{ always() }}
+        env:
+          JOB_STATUS: ${{ job.status }}
+        run: |
+          set -o errexit -o nounset -o pipefail
+
+          #######################################
+          # Map the `job.status` GitHub context value
+          # to a single-character status glyph.
+          #
+          # Arguments:
+          #   1: GitHub Actions job status
+          #      ('success', 'failure', 'cancelled', 'skipped').
+          # Outputs (stdout):
+          #   '✅' for success, '❌' otherwise.
+          #######################################
+          function status_glyph() {
+            local -r status="$1"
+
+            if [[ "$status" == 'success' ]]; then
+              printf '✅'
+            else
+              printf '❌'
+            fi
+          }
+
+          #######################################
+          # Append a single check row to the GitHub step summary.
+          #
+          # Arguments:
+          #   1: human-readable check name.
+          #   2: status glyph from status_glyph().
+          # Outputs:
+          #   Appends '| <name> | <glyph> |'
+          #   to $GITHUB_STEP_SUMMARY.
+          #######################################
+          function append_row() {
+            local -r name="$1"
+            local -r glyph="$2"
+
+            printf '| %-10s | %s |\n' "$name" "$glyph" \
+              >> "$GITHUB_STEP_SUMMARY"
+          }
+
+          #######################################
+          # Render the full summary section.
+          #
+          # Globals:
+          #   JOB_STATUS, GITHUB_STEP_SUMMARY (read).
+          #######################################
+          function main() {
+            local glyph
+            glyph="$(status_glyph "$JOB_STATUS")"
+
+            {
+              echo '## 🧹 Lint & Style'
+              echo
+              echo '| Check      | Status |'
+              echo '|------------|--------|'
+            } >> "$GITHUB_STEP_SUMMARY"
+
+            append_row 'shellcheck' "$glyph"
+            append_row 'shfmt'      "$glyph"
+            append_row 'style gate' "$glyph"
+          }
+
+          main "$@"

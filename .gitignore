@@ -1,61 +1,117 @@
-# OS / filesystem noise
+# ─── OS / filesystem noise ───────────────────────────────────────────────
 .DS_Store
 .DS_Store?
-Thumbs.db
-ehthumbs.db
-Icon?
+._*
+.AppleDouble
+.LSOverride
 .Spotlight-V100
 .Trashes
-*.swp
-*.swo
-*~
-.#*
+.fseventsd
+Icon?
+Thumbs.db
+ehthumbs.db
+ehthumbs_vista.db
+Desktop.ini
+$RECYCLE.BIN/
+.directory
+.Trash-*
 .nfs*
 
-# Editors / IDEs
-.vscode/
+# ─── Editor / IDE state ──────────────────────────────────────────────────
+# vim / emacs / nano backups & swap files
+*.swp
+*.swo
+*.swn
+*~
+.#*
+\#*\#
+*.orig
+*.rej
+
+# JetBrains
 .idea/
 *.iml
+*.iws
+*.ipr
+
+# VS Code / Cursor / Kiro
+.vscode/
+*.code-workspace
+.history/
+
+# Sublime Text
 *.sublime-project
 *.sublime-workspace
-*.code-workspace
 
-# Shell history / local stuff
+# Other
+.fleet/
+.zed/
+nbproject/
+
+# ─── Shell ───────────────────────────────────────────────────────────────
 .bash_history
 .zsh_history
-*.local
-*.local.sh
+.bashrc.local
+.zshrc.local
 
-# Python
-__pycache__/
-*.py[cod]
-*.pyo
+# ─── Project-local: bats artifacts ───────────────────────────────────────
+# bats writes per-run temp dirs under $BATS_TMPDIR by default,
+# but on CI / older systems they may end up under tests/.
+.bats-tmp/
+tests/.tmp/
+tests/.bats/
+tests/**/tmp/
+*.bats.log
 
-# Virtual environments
-.venv/
-venv/
-.env/
+# ─── Project-local: shellcheck / shfmt caches ────────────────────────────
+.shellcheckcache/
 
-# Runtime / temp files
+# ─── Generic temp / cache / build artifacts ──────────────────────────────
 tmp/
 temp/
-*.tmp
-*.log
-*.cache
 cache/
+.cache/
+*.tmp
 *.bak
 *.old
+*.log
 
-# Environment / secrets
-.env
-.env.*
-*.secret
-*.key
-*.pem
-
-# Tool outputs
+# Tool outputs (kept here in case future tooling lands)
 dist/
 build/
 out/
 coverage/
 reports/
+node_modules/
+
+# ─── Python (used by some sibling tools / CI helpers) ────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+env/
+.env/
+.tox/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+
+# ─── Secrets ─────────────────────────────────────────────────────────────
+.env
+.env.*
+!.env.example
+*.secret
+*.key
+*.pem
+*.pfx
+*.p12
+id_rsa
+id_ed25519
+*.gpg
+
+# ─── Local-only configuration overrides ──────────────────────────────────
+# Anything ending in .local / .local.sh is treated as developer-private.
+*.local
+*.local.sh
+local.mk

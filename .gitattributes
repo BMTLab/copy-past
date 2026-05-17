@@ -1,24 +1,88 @@
-# Use LF for all text files in this (Unix-oriented) project
+# ─── Default: detect text files automatically ────────────────────────────
+# `text=auto` lets git decide;
+# `eol=lf` then enforces LF line endings on checkout for every text file.
+# This is critical for shell scripts: a CRLF copy.sh will fail to run
+# with `bad interpreter: /bin/bash^M` on Linux.
 * text=auto eol=lf
 
-# Shell scripts
-*.sh   text eol=lf
-*.bash text eol=lf
-*.zsh  text eol=lf
+# ─── Shell ───────────────────────────────────────────────────────────────
+*.sh        text eol=lf diff=bash
+*.bash      text eol=lf diff=bash
+*.zsh       text eol=lf diff=bash
+*.bats      text eol=lf diff=bash
+.bashrc     text eol=lf diff=bash
+.bash_*     text eol=lf diff=bash
+.profile    text eol=lf diff=bash
 
-# Python scripts
-*.py   text eol=lf
+# ─── Make ────────────────────────────────────────────────────────────────
+Makefile    text eol=lf diff=make
+*.mk        text eol=lf diff=make
+makefile    text eol=lf diff=make
+GNUmakefile text eol=lf diff=make
 
-# Docs / metadata
-*.md    text eol=lf diff=markdown
-*.txt   text eol=lf
-LICENSE text eol=lf
+# ─── Documentation & metadata ────────────────────────────────────────────
+*.md        text eol=lf diff=markdown
+*.markdown  text eol=lf diff=markdown
+*.txt       text eol=lf
+*.rst       text eol=lf
+LICENSE     text eol=lf
+LICENCE     text eol=lf
+COPYING     text eol=lf
+NOTICE      text eol=lf
+AUTHORS     text eol=lf
+CHANGELOG   text eol=lf
+README      text eol=lf
 
-# Ignore log files and databases
-*.log binary
+# ─── Config / CI ─────────────────────────────────────────────────────────
+*.json      text eol=lf
+*.yml       text eol=lf
+*.yaml      text eol=lf
+*.toml      text eol=lf
+*.ini       text eol=lf
+*.cfg       text eol=lf
+*.conf      text eol=lf
+.editorconfig text eol=lf
+.gitignore    text eol=lf
+.gitattributes text eol=lf
+Dockerfile  text eol=lf
 
-# Ignore created directories
-bin/ ignore
-include/ ignore
-lib/ ignore
-lib64/ ignore
+# ─── Binary assets ───────────────────────────────────────────────────────
+# These should never be normalised or diffed as text.
+*.png       binary
+*.jpg       binary
+*.jpeg      binary
+*.gif       binary
+*.webp      binary
+*.ico       binary
+*.svg       text eol=lf
+*.pdf       binary
+*.zip       binary
+*.tar       binary
+*.tar.gz    binary
+*.tgz       binary
+*.gz        binary
+*.bz2       binary
+*.xz        binary
+*.7z        binary
+
+# ─── Linguist hints (GitHub language stats) ──────────────────────────────
+# Without this, GitHub may classify the project as Roff / Markdown
+# because of the README; mark generated/vendored paths so they don't
+# inflate the language stats.
+*.bats          linguist-language=Shell
+tests/**        linguist-detectable=true
+*.md            linguist-documentation
+LICENSE         linguist-generated
+
+# ─── Export-ignore ───────────────────────────────────────────────────────
+# Files excluded from `git archive` tarballs (release downloads).
+# Users installing via tarball don't need the test suite or CI metadata.
+.gitignore      export-ignore
+.gitattributes  export-ignore
+.github/        export-ignore
+.idea/          export-ignore
+.vscode/        export-ignore
+tests/          export-ignore
+.editorconfig   export-ignore
+release-please-config.json    export-ignore
+.release-please-manifest.json export-ignore

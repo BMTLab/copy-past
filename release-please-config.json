@@ -1,0 +1,26 @@
+{
+  "release-type": "simple",
+  "include-component-in-tag": false,
+  "include-v-in-tag": true,
+  "bump-minor-pre-major": true,
+  "bump-patch-for-minor-pre-major": true,
+  "packages": {
+    ".": {
+      "package-name": "copy-past",
+      "extra-files": [
+        {
+          "type": "generic",
+          "path": "copy.sh"
+        },
+        {
+          "type": "generic",
+          "path": "past.sh"
+        },
+        {
+          "type": "generic",
+          "path": "Makefile"
+        }
+      ]
+    }
+  }
+}
