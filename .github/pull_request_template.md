@@ -21,7 +21,6 @@
 - [ ] New and existing tests pass locally with my changes
 - [ ] My changes generate no new warnings
 - [ ] I have made corresponding changes to the documentation
-- [ ] My code follows the style guidelines of this project, and I have read the [CONTRIBUTING](https://github.com/BMTLab/copy-past/blob/main/CONTRIBUTING.md)
 <!-- - [ ] Any dependent changes have been merged and published in downstream modules -->
 
 <!-- ## Additional Notes -->

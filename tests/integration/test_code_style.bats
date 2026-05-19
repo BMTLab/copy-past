@@ -1,9 +1,7 @@
 #!/usr/bin/env bats
 
-# Name: tests/bats/test_code_style.bats
+# Name: tests/integration/test_code_style.bats
 # Author: Nikita Neverov (BMTLab)
-# Version: 1.1.0
-# Date: 2026-05-17
 # License: MIT
 #
 # Description:
@@ -87,7 +85,7 @@ __report_failures() {
 
   # Act:
   # SC2155 is suppressed,
-  # because the project deliberately uses `local var=$(…)`
+  # because the project deliberately uses `local var=$(...)`
   # for readability;
   # the loss of the inner exit code is acceptable
   # for these small helpers.

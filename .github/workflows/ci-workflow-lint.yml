@@ -43,7 +43,8 @@ jobs:
       #   - misuse of expression syntax
       #   - shellcheck warnings inside `run:` blocks
       - name: 🪝 actionlint via reviewdog
-        uses: reviewdog/action-actionlint@v1.48.0
+        id: actionlint
+        uses: reviewdog/action-actionlint@v1.72.0
         env:
           # reviewdog uses this token to post inline review
           # comments on pull requests.
@@ -62,12 +63,17 @@ jobs:
           # `error` makes reviewdog promote any actionlint finding
           # to an error-level annotation in the GitHub UI.
           level: error
-          # `fail_on_error: true` makes the step exit non-zero
-          # whenever actionlint reports at least one issue,
-          # mirroring the strictness of the rest of the lint job.
-          # The newer `fail_level` input only exists on master
-          # and is not yet released in v1.48.0.
-          fail_on_error: 'true'
+          fail_level: 'warning'
+
+      # Surface the actionlint result as a notice on success
+      # so the run summary clearly states 'no findings'.
+      # Failures are already annotated inline by reviewdog
+      # on the offending workflow line, so we do not re-emit
+      # an `::error` here.
+      - name: ✅ Confirm clean
+        if: ${{ success() }}
+        run: |
+          echo '::notice title=actionlint::No findings on .github/workflows/*.yml'
 
       - name: 📊 Summary
         if: ${{ always() }}

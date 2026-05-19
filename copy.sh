@@ -2,7 +2,7 @@
 
 # Name: copy.sh
 # Author: Nikita Neverov (BMTLab)
-# Version: 1.4.0 # x-release-please-version
+# Version: 1.4.0
 # Date: 2026-05-17
 # License: MIT
 #
@@ -79,6 +79,13 @@
 #       or when debugging X11 vs Wayland behaviour.
 #       xsel does not support MIME types,
 #       so non-text payloads fall back to an error there.
+#
+#   Debug logging:
+#     - --debug (alias -d / --verbose) emits structured event lines
+#       on stderr, prefixed with '[copy debug]'.
+#       Format: '[copy debug] event=<name> key=value key=value'.
+#       The flag is silent by default, so existing pipelines
+#       are not disturbed.
 #
 # Usage:
 #   # As a standalone script (must be in $PATH):
@@ -183,6 +190,10 @@ Options:
                         Implies --raw.
       --no-auto         Disable the always-on auto-detection
                         and copy the payload as text/plain.
+  -d, --debug, --verbose
+                        Print structured debug events on stderr
+                        (lines prefixed with '[copy debug]').
+                        Has no effect on stdout or the payload.
   --                    End of options; remaining arguments are treated as text.
 
 Environment:
@@ -220,6 +231,63 @@ function __cp_error() {
   printf 'ERROR: %s\n' "$message" >&2
 
   return "$code"
+}
+
+#######################################
+# Emit a structured debug log line on stderr.
+#
+# The format is intentionally machine-friendly so that tests
+# (and humans grepping logs) can match individual events:
+#
+#   [copy debug] event=<name> key=value key2='value with spaces'
+#
+# Values that contain whitespace are wrapped in single quotes;
+# everything else is printed verbatim.
+# When the user has not enabled --debug the helper is a no-op,
+# so default-mode invocations stay completely silent on stderr
+# and existing user pipelines are unaffected.
+#
+# Arguments:
+#   1:        debug_mode flag (0 = silent, 1 = active).
+#   2:        event name (free-form, alpha-numeric + dashes).
+#   3..N:     key=value pairs, in order.
+#
+# Outputs:
+#   One line on stderr when debug_mode is non-zero.
+#######################################
+function __cp_debug() {
+  local -ir debug_mode=$1
+  if ((!debug_mode)); then
+    return 0
+  fi
+
+  local -r event="$2"
+  shift 2
+
+  # Build the trailing 'key=value key=value' suffix.
+  # Quote any value that contains whitespace,
+  # so a downstream `read`-based parser stays unambiguous.
+  local kv pair key value suffix=''
+  for kv in "$@"; do
+    key="${kv%%=*}"
+    value="${kv#*=}"
+    if [[ "$value" == *[[:space:]]* ]]; then
+      pair="${key}='${value}'"
+    else
+      pair="${kv}"
+    fi
+    if [[ -z $suffix ]]; then
+      suffix="$pair"
+    else
+      suffix+=" $pair"
+    fi
+  done
+
+  if [[ -z $suffix ]]; then
+    printf '[copy debug] event=%s\n' "$event" >&2
+  else
+    printf '[copy debug] event=%s %s\n' "$event" "$suffix" >&2
+  fi
 }
 
 #######################################
@@ -488,7 +556,7 @@ function __cp_sniff_mime() {
 #
 #   - OSC sequences:
 #       ESC ] <any chars except ESC/BEL> (BEL | ESC \)
-#       Covers e.g. window titles (ESC]0;…) and OSC 8 hyperlinks.
+#       Covers e.g. window titles (ESC]0;...) and OSC 8 hyperlinks.
 #   - CSI sequences:
 #       ESC [ <params 0x30-0x3F> <intermediates 0x20-0x2F> <final 0x40-0x7E>
 #       The parameter range includes private markers (?, <, =, >),
@@ -501,7 +569,7 @@ function __cp_sniff_mime() {
 #   so the short-escape catch-all does not consume
 #   the leading ESC of a CSI/OSC sequence.
 #
-#   Uses bash $'…' to inject the literal escape character;
+#   Uses bash $'...' to inject the literal escape character;
 #   this keeps the substitution portable
 #   between GNU sed and BSD/macOS sed
 #   (the \xNN notation is a GNU extension).
@@ -512,7 +580,7 @@ function __cp_sniff_mime() {
 #   Cleaned text to stdout.
 #######################################
 function __cp_strip_ansi() {
-  # Inject literal ESC (0x1B) and BEL (0x07) bytes via $'…'.
+  # Inject literal ESC (0x1B) and BEL (0x07) bytes via $'...'.
   # Doing it this way makes the regex readable (no \x1b clutter)
   # and works the same on GNU sed and BSD sed.
   local -r esc=$'\033'
@@ -568,7 +636,7 @@ function __cp_trim_whitespace() {
 # and writes the result to the chosen backend.
 #
 # Pulled into its own function so the caller
-# can wrap the whole thing in `(set -o pipefail; …)`
+# can wrap the whole thing in `(set -o pipefail; ...)`
 # and have any stage's failure (sed, trim, backend)
 # propagate as the subshell's exit code.
 #
@@ -660,125 +728,236 @@ function __cp_read_clipboard() {
 
 # endregion
 
-# region Public API
+# region Option model
 
 #######################################
-# Main function to write to clipboard.
+# Initialise the options struct to its defaults.
+#
+# The 'struct' is a set of caller-owned scalars, passed in by name
+# via Bash namerefs. Keeping the state on the caller's stack
+# (instead of using globals) means each `copy` invocation gets
+# its own clean slate, even when callers source the script
+# and call the function in a long-lived shell.
 #
 # Arguments:
-#   [options] [text...] or read from stdin.
+#   1: nameref to raw_mode    (int, 0 default).
+#   2: nameref to trim_mode   (int, 0 default).
+#   3: nameref to append_mode (int, 0 default).
+#   4: nameref to auto_mode   (int, 1 default; auto-detection on).
+#   5: nameref to debug_mode  (int, 0 default).
+#   6: nameref to mime_type   (string, '' default).
+#######################################
+function __cp_init_options() {
+  local -n _raw_mode="$1"
+  local -n _trim_mode="$2"
+  local -n _append_mode="$3"
+  local -n _auto_mode="$4"
+  local -n _debug_mode="$5"
+  local -n _mime_type="$6"
+
+  _raw_mode=0
+  _trim_mode=0
+  _append_mode=0
+  _auto_mode=1
+  _debug_mode=0
+  _mime_type=''
+}
+
+#######################################
+# Map a bare image format identifier (e.g. 'jpg', 'svg', 'webp')
+# to a canonical IANA `image/<...>` MIME type.
 #
-# Options:
-#   See __cp_usage for the authoritative list.
+# Unknown formats are forwarded as `image/<format>` verbatim,
+# which lets the backend reject them with its own error
+# instead of failing here.
+#
+# Arguments:
+#   1: nameref to the destination string variable.
+#   2: format identifier string (already validated as non-empty).
+#######################################
+function __cp_image_format_to_mime() {
+  # Use a private nameref name that no caller is allowed to use
+  # for its own state, so we never end up with a self-referencing
+  # nameref (which Bash silently downgrades to a plain string).
+  local -n _mime_dst="$1"
+  local -r format="$2"
+
+  case "$format" in
+    jpg | jpeg) _mime_dst='image/jpeg' ;;
+    png | webp | gif | bmp | tiff)
+      _mime_dst="image/${format}"
+      ;;
+    svg) _mime_dst='image/svg+xml' ;;
+    *) _mime_dst="image/${format}" ;;
+  esac
+}
+
+# endregion
+
+# region Argument parsing
+#
+# Each flag handler is split into its own tiny function that takes
+# namerefs into the option struct (and to `_consumed`, the number
+# of argv slots the handler ate). Splitting the handlers this way
+# means each one fits on a screen and is independently testable,
+# while keeping the dispatch loop free of inline option bodies.
+
+#######################################
+# Parse the value of a `--type[=]MIME` flag.
+#
+# Handles both the `--type MIME` and `--type=MIME` forms.
+# Empty values are rejected with COPY_ERR_USAGE.
+#
+# Arguments:
+#   1:    nameref to mime_type slot.
+#   2:    nameref to consumed-arg counter.
+#   3..N: remaining argv (only $3 and $4 are inspected).
 #
 # Returns:
-#   0: On success.
-#   Non-zero: On error (see header for code list).
+#   0: on success.
+#   COPY_ERR_USAGE: when the value is missing or empty.
 #######################################
-function copy() {
-  # Restrict word splitting to newline/tab inside this function.
-  # Stops accidental space-splitting on user input, while still
-  # allowing arrays-from-newlines patterns where they are intended.
-  # When we need space-joining (echo "$*"), we override IFS locally.
-  local IFS=$'\n\t'
-  local -i raw_mode=0
-  local -i trim_mode=0
-  local -i append_mode=0
-  # Auto-detection:
-  #   1 (default) : both heuristics run
-  #                 (JSON via jq, image magic bytes).
-  #   0           : disabled (--no-auto flag).
-  local -i auto_mode=1
-  local mime_type=''
+function __cp_parse_type_flag() {
+  local -n _mime_out="$1"
+  local -n _consumed="$2"
+  local -r flag="$3"
 
-  # region Option parsing
-  #
-  # Standard GNU-style:
-  #   -h / --help        : print usage and exit 0
-  #   -r / --raw         : disable ANSI stripping
-  #   -a / --append      : append to existing clipboard content
-  #        --trim        : trim leading/trailing whitespace
-  #        --type MIME   : explicit MIME type
-  #        --json        : sugar for --type application/json --raw
-  #        --image[=FMT] : sugar for --type image/<fmt> --raw
-  #   --                 : end of options, the rest is text
-  #   -*                 : unknown option, exit 2
-  #
-  # Plain words break the loop and reach the 'argument mode' branch
-  # below. Multiple flags of the same kind are idempotent.
+  if [[ "$flag" == --type=* ]]; then
+    _mime_out="${flag#*=}"
+    _consumed=1
+  else
+    if [[ -z ${4-} ]]; then
+      __cp_error '--type requires a MIME argument' \
+        "$COPY_ERR_USAGE" \
+        || return "$?"
+    fi
+    _mime_out="$4"
+    _consumed=2
+  fi
+
+  if [[ -z $_mime_out ]]; then
+    __cp_error '--type requires a MIME argument' \
+      "$COPY_ERR_USAGE" \
+      || return "$?"
+  fi
+}
+
+#######################################
+# Parse the value of a `--image[=FORMAT]` flag.
+#
+# `--image` alone is treated as `--image=png`.
+# Both forms set `raw_mode=1`, because binary payloads must not
+# go through the ANSI-stripping pipeline.
+#
+# Arguments:
+#   1:    nameref to mime_type slot.
+#   2:    nameref to raw_mode slot.
+#   3:    nameref to consumed-arg counter.
+#   4:    the original flag (`--image` or `--image=FOO`).
+#
+# Returns:
+#   0: on success.
+#   COPY_ERR_USAGE: when an empty format is supplied.
+#######################################
+function __cp_parse_image_flag() {
+  local -n _mime_out="$1"
+  local -n _raw_out="$2"
+  local -n _consumed="$3"
+  local -r flag="$4"
+
+  if [[ "$flag" == '--image' ]]; then
+    _mime_out='image/png'
+  else
+    local -r format="${flag#*=}"
+    if [[ -z $format ]]; then
+      __cp_error '--image=FORMAT requires a non-empty format' \
+        "$COPY_ERR_USAGE" \
+        || return "$?"
+    fi
+    __cp_image_format_to_mime _mime_out "$format"
+  fi
+
+  _raw_out=1
+  _consumed=1
+}
+
+#######################################
+# Parse the full argv into the option struct.
+#
+# All flags are consumed left-to-right; the first plain word
+# (or `--`) ends option parsing and the remaining argv is left
+# for the caller to treat as the positional payload.
+#
+# Arguments:
+#   1:    nameref to raw_mode    (int).
+#   2:    nameref to trim_mode   (int).
+#   3:    nameref to append_mode (int).
+#   4:    nameref to auto_mode   (int).
+#   5:    nameref to debug_mode  (int).
+#   6:    nameref to mime_type   (string).
+#   7:    nameref to a string array that will receive the leftover
+#         positional arguments (post-flags) in order.
+#   8..N: the original argv to parse.
+#
+# Returns:
+#   0:               on success or when --help was handled.
+#   1 (sentinel)     when --help was consumed
+#                    and the caller should exit with code 0.
+#   COPY_ERR_USAGE:  on unknown flags or malformed values.
+#######################################
+function __cp_parse_args() {
+  local -n _raw="$1"
+  local -n _trim="$2"
+  local -n _append="$3"
+  local -n _auto="$4"
+  local -n _debug="$5"
+  local -n _mime="$6"
+  local -n _rest="$7"
+  shift 7
+
+  local -i consumed=0
+
   while [[ $# -gt 0 ]]; do
     case "$1" in
       -h | --help)
         __cp_usage
-        return 0
+        # Magic return code: copy() interprets 200 as 'help shown,
+        # exit 0'. We avoid 0 here because 0 is reserved for
+        # 'parsing succeeded, continue to the next phase'.
+        return 200
         ;;
       -r | --raw)
-        raw_mode=1
+        _raw=1
         shift
         ;;
       -a | --append)
-        append_mode=1
+        _append=1
         shift
         ;;
       --trim)
-        trim_mode=1
+        _trim=1
         shift
         ;;
-      --type)
-        if [[ -z ${2-} ]]; then
-          __cp_error '--type requires a MIME argument' \
-            "$COPY_ERR_USAGE" \
-            || return "$?"
-        fi
-        mime_type="$2"
-        shift 2
-        ;;
-      --type=*)
-        mime_type="${1#*=}"
-        if [[ -z $mime_type ]]; then
-          __cp_error '--type requires a MIME argument' \
-            "$COPY_ERR_USAGE" \
-            || return "$?"
-        fi
-        shift
+      --type | --type=*)
+        __cp_parse_type_flag _mime consumed "$@" || return "$?"
+        shift "$consumed"
         ;;
       -j | --json)
-        # JSON is a textual format,
-        # but ANSI stripping might corrupt embedded escape sequences,
-        # so we treat it like binary and skip the strip step.
-        mime_type='application/json'
-        raw_mode=1
+        _mime='application/json'
+        _raw=1
         shift
         ;;
-      --image)
-        mime_type='image/png'
-        raw_mode=1
-        shift
-        ;;
-      --image=*)
-        local -r fmt="${1#*=}"
-        if [[ -z $fmt ]]; then
-          __cp_error '--image=FORMAT requires a non-empty format' \
-            "$COPY_ERR_USAGE" \
-            || return "$?"
-        fi
-        # Map a few common short names to canonical IANA media types.
-        case "$fmt" in
-          jpg | jpeg) mime_type='image/jpeg' ;;
-          png | webp | gif | bmp | tiff)
-            mime_type="image/${fmt}"
-            ;;
-          svg) mime_type='image/svg+xml' ;;
-          *) mime_type="image/${fmt}" ;; # forward as-is
-        esac
-        raw_mode=1
-        shift
+      --image | --image=*)
+        __cp_parse_image_flag _mime _raw consumed "$1" \
+          || return "$?"
+        shift "$consumed"
         ;;
       --no-auto)
-        # Suppress the always-on auto-detection;
-        # useful when the payload looks like JSON
-        # but should be copied as plain text verbatim.
-        auto_mode=0
+        _auto=0
+        shift
+        ;;
+      -d | --debug | --verbose)
+        _debug=1
         shift
         ;;
       --)
@@ -790,31 +969,80 @@ function copy() {
           || return "$?"
         ;;
       *)
+        # Plain word: stop consuming options.
         break
         ;;
     esac
   done
-  # endregion
 
-  # region Option compatibility checks
-  #
-  # Reject combinations that would silently corrupt data
-  # before we touch the clipboard at all.
-  local -i is_binary_mime=0
-  case "$mime_type" in
-    image/* | application/octet-stream)
-      is_binary_mime=1
-      ;;
+  # Whatever is left becomes the positional payload.
+  _rest=("$@")
+  return 0
+}
+
+# endregion
+
+# region Option validation
+
+#######################################
+# Classify a MIME string as binary or text-ish.
+#
+# Binary classes (image/*, application/octet-stream)
+# bypass the ANSI/trim pipeline and forbid --append / --trim.
+# Everything else (including application/json and text/*)
+# is treated as text-ish for transformation purposes.
+#
+# Arguments:
+#   1: nameref to a 0/1 sink (set to 1 for binary, 0 for text).
+#   2: MIME type string (may be empty).
+#######################################
+function __cp_classify_mime() {
+  local -n _is_binary="$1"
+  local -r mime="$2"
+
+  case "$mime" in
+    image/* | application/octet-stream) _is_binary=1 ;;
+    *) _is_binary=0 ;;
   esac
+}
 
-  if ((append_mode && is_binary_mime)); then
+#######################################
+# Cross-flag compatibility checks for option combinations
+# that would silently corrupt data.
+#
+# Also reconciles auto-detection with user choices:
+#   * an explicit MIME pin always wins over auto-detection;
+#   * --append disables auto-detection because the prelude
+#     (existing clipboard text) is already mixed in downstream,
+#     so classifying half a payload would lie.
+#
+# Arguments:
+#   1: nameref to auto_mode (read+write).
+#   2: append_mode (int).
+#   3: trim_mode   (int).
+#   4: mime_type   (string).
+#
+# Returns:
+#   0: on success.
+#   COPY_ERR_TYPE_MISMATCH: on incompatible combos.
+#######################################
+function __cp_validate_options() {
+  local -n _auto="$1"
+  local -ir append_mode=$2
+  local -ir trim_mode=$3
+  local -r mime="$4"
+
+  local -i is_binary=0
+  __cp_classify_mime is_binary "$mime"
+
+  if ((append_mode && is_binary)); then
     __cp_error \
       '--append is only valid for text payloads, not for binary MIME types' \
       "$COPY_ERR_TYPE_MISMATCH" \
       || return "$?"
   fi
 
-  if ((trim_mode && is_binary_mime)); then
+  if ((trim_mode && is_binary)); then
     __cp_error \
       '--trim is only valid for text payloads, not for binary MIME types' \
       "$COPY_ERR_TYPE_MISMATCH" \
@@ -822,241 +1050,525 @@ function copy() {
   fi
 
   # An explicit MIME pin always wins over auto-detection.
-  # We honour the user's intent and skip sniffing entirely.
-  if ((auto_mode)) && [[ -n $mime_type ]]; then
-    auto_mode=0
+  if ((_auto)) && [[ -n $mime ]]; then
+    _auto=0
   fi
 
   # --append is text-only by design,
-  # and the auto-detected MIME might be a binary type
-  # (e.g. image/png).
-  # When both flags are set,
-  # we silently disable the heuristic
+  # and auto-detection might pick a binary type (e.g. image/png).
+  # Silently disable the heuristic
   # rather than failing,
-  # because the more conservative behaviour
-  # is also what an experienced user expects:
-  # 'append this text to whatever is already in the clipboard'.
-  if ((auto_mode && append_mode)); then
-    auto_mode=0
+  # because 'append text to whatever is in the clipboard'
+  # is the conservative, intuitive behaviour.
+  if ((_auto && append_mode)); then
+    _auto=0
   fi
-  # endregion
+}
 
-  # region Backend resolution
-  #
-  # We deliberately use `cmd || rc=$?` rather than `if ! cmd`,
-  # because `if !` resets $? before we can read it
-  # (the `!` itself is the most recent command in the pipeline).
-  local -a clipboard_backend_cmd
-  local -i _detect_rc=0
+# endregion
 
-  __cp_detect_backend clipboard_backend_cmd || _detect_rc=$?
+# region Backend wiring
 
-  if [[ $_detect_rc -ne 0 ]]; then
-    # Usage errors (unknown override) are already reported
-    # by __cp_detect_backend; we just propagate the code.
-    if [[ $_detect_rc -eq $COPY_ERR_USAGE ]]; then
-      return "$_detect_rc"
+#######################################
+# Resolve the clipboard backend command and apply an explicit MIME.
+#
+# Wraps __cp_detect_backend + __cp_apply_mime
+# with proper error reporting,
+# so the orchestrator stays free of duplicated rc-handling.
+#
+# Arguments:
+#   1: nameref to a string array that receives the backend argv.
+#   2: explicit MIME type (may be empty; skips __cp_apply_mime).
+#
+# Returns:
+#   0: on success.
+#   COPY_ERR_USAGE: on unknown COPY_PAST_BACKEND override.
+#   COPY_ERR_NO_BACKEND: when no backend is installed.
+#   COPY_ERR_TYPE_MISMATCH: when the MIME flag is incompatible
+#                           with the chosen backend (e.g. xsel).
+#######################################
+function __cp_resolve_backend() {
+  local -n _backend="$1"
+  local -r mime="$2"
+
+  local -i detect_rc=0
+  __cp_detect_backend _backend || detect_rc=$?
+
+  if ((detect_rc != 0)); then
+    if ((detect_rc == COPY_ERR_USAGE)); then
+      # __cp_detect_backend already emitted its own message.
+      return "$detect_rc"
     fi
 
     local error_msg='No clipboard backend found. '
     error_msg+='Install wl-clipboard, xclip, or xsel.'
-
     __cp_error "$error_msg" \
       "$COPY_ERR_NO_BACKEND" \
       || return "$?"
   fi
 
-  # Apply --type / --json / --image to the backend command,
-  # if a MIME type was requested.
-  # __cp_apply_mime emits its own error on xsel + non-text combos.
-  if [[ -n $mime_type ]]; then
-    __cp_apply_mime clipboard_backend_cmd "$mime_type" \
-      || return "$?"
+  if [[ -n $mime ]]; then
+    __cp_apply_mime _backend "$mime" || return "$?"
   fi
-  # endregion
+}
 
-  # region Auto-detection
-  #
-  # When auto-detection is on (the default),
-  # we buffer the payload to a temp file,
-  # inspect its leading bytes,
-  # and pick a MIME type:
-  #
-  #   * binary magic bytes (PNG / JPEG / GIF / BMP / WebP)
-  #     -> image/<format>
-  #     (these signatures cannot occur in plain text by design,
-  #     so the detection is false-positive-free);
-  #   * `{` or `[` followed by a clean `jq` parse
-  #     -> application/json
-  #     (skipped silently when `jq` is not installed);
-  #   * anything else -> text/plain.
-  #
-  # On a non-text result we feed the backend straight from the
-  # buffer, bypassing __cp_emit / ANSI stripping / trimming,
-  # because those would corrupt binary payloads
-  # and rewrite JSON strings that happen to contain
-  # escape characters.
-  #
-  # On a text/plain result we replace the function's stdin
-  # with the buffered file via `exec < "$buffer"`
-  # so the regular pipe/argument paths below
-  # see the same bytes we just classified.
-  if ((auto_mode)); then
-    local sniff_buffer
-    sniff_buffer="$(mktemp -t copy-auto.XXXXXX)"
+# endregion
 
-    if [[ ! -t 0 ]]; then
-      cat >"$sniff_buffer"
-    elif [[ $# -gt 0 ]]; then
-      # Argument mode: same join-with-spaces convention as below.
-      (
-        IFS=' '
-        echo "$*"
-      ) >"$sniff_buffer"
-    else
-      rm -f -- "$sniff_buffer"
-      local error_msg='No input provided. '
-      error_msg+='Pass text as arguments or pipe via stdin.'
+# region Input buffering
 
-      __cp_usage >&2
-      __cp_error "$error_msg" \
-        "$COPY_ERR_USAGE" \
-        || return "$?"
-    fi
+#######################################
+# Capture the payload (stdin or argv) into a temp file
+# so we can sniff its leading bytes and replay it later.
+#
+# When stdin is piped in, we cat it verbatim.
+# Otherwise we join the positional args with single spaces
+# (the same `echo "$*"` convention used by the regular
+# argument-mode branch downstream).
+# An empty argv with a tty stdin is a usage error.
+#
+# Arguments:
+#   1:    nameref to a string sink that receives the file path.
+#   2..N: the positional payload (post-flags).
+#
+# Outputs:
+#   No stdout. The buffered file lives at the path stored in $1.
+#
+# Returns:
+#   0: on success.
+#   COPY_ERR_USAGE: on no input at all.
+#######################################
+function __cp_buffer_input() {
+  local -n _buffer_path="$1"
+  shift
 
-    local sniffed_mime
-    sniffed_mime="$(__cp_sniff_mime "$sniff_buffer")"
+  _buffer_path="$(mktemp -t copy-auto.XXXXXX)"
 
-    if [[ "$sniffed_mime" != 'text/plain' ]]; then
-      # Non-text result: apply the MIME to the backend
-      # and feed bytes verbatim from the buffer.
-      if ! __cp_apply_mime clipboard_backend_cmd "$sniffed_mime"; then
-        local -ir _mime_rc=$?
-        rm -f -- "$sniff_buffer"
-        return "$_mime_rc"
-      fi
-      echo "::notice title=copy::auto-detected MIME ${sniffed_mime}" >&2 \
-        2>/dev/null || true
-
-      local -i emit_rc=0
-      "${clipboard_backend_cmd[@]}" <"$sniff_buffer" || emit_rc=$?
-      rm -f -- "$sniff_buffer"
-
-      if ((emit_rc != 0)); then
-        __cp_error 'Clipboard backend failed.' \
-          "$COPY_ERR_BACKEND_FAILED" \
-          || return "$?"
-      fi
-      return 0
-    fi
-
-    # text/plain result: keep the regular pipeline below
-    # (which honours --raw / --trim / ANSI stripping).
-    # Replace stdin with the buffered file so the downstream
-    # `__cp_emit_with_prelude | __cp_emit` chain
-    # sees the same bytes we just classified.
-    exec <"$sniff_buffer"
-    rm -f -- "$sniff_buffer"
-  fi
-  # endregion
-
-  # region Append prelude
-  #
-  # When --append is set, we read the current clipboard content first
-  # and stash it in a temp file, so the new payload can be concatenated
-  # with the old one before reaching the backend.
-  # The temp file is cleaned up on every exit path
-  # via an EXIT trap registered in a subshell.
-  local prelude_file=''
-  if ((append_mode)); then
-    prelude_file="$(mktemp -t copy-append.XXXXXX)"
-    if ! __cp_read_clipboard >"$prelude_file"; then
-      rm -f -- "$prelude_file"
-      __cp_error \
-        'Failed to read existing clipboard for --append' \
-        "$COPY_ERR_BACKEND_FAILED" \
-        || return "$?"
-    fi
-  fi
-
-  # Helper: emit prelude (existing buffer) + new payload through the
-  # configured pipeline. The prelude is NEVER passed through ANSI
-  # stripping or trimming, because we already trust whatever was in
-  # the clipboard; only the new payload is transformed.
-  local -i emit_rc=0
-  function __cp_emit_with_prelude() {
-    if [[ -n $prelude_file ]]; then
-      cat -- "$prelude_file"
-    fi
-    cat
-  }
-  # endregion
-
-  # region Pipe mode
-  #
-  # `[[ ! -t 0 ]]` is true when stdin is NOT a terminal,
-  # i.e. someone is piping data in. The pipeline runs in a subshell
-  # so that `set -o pipefail` does not leak into the caller's shell.
-  #
-  # We use the `cmd || rc=$?` pattern (instead of `if ! cmd`)
-  # because `if ! ( … )` would clobber `$?` with the inversion
-  # result and we would never see the real subshell exit code.
   if [[ ! -t 0 ]]; then
-    (
-      set -o pipefail
-      __cp_emit_with_prelude \
-        | __cp_emit "$raw_mode" "$trim_mode" "${clipboard_backend_cmd[@]}"
-    ) || emit_rc="$?"
-    [[ -n $prelude_file ]] && rm -f -- "$prelude_file"
-
-    if ((emit_rc != 0)); then
-      __cp_error 'Clipboard backend failed during pipe operation.' \
-        "$COPY_ERR_BACKEND_FAILED" \
-        || return "$?"
-    fi
+    cat >"$_buffer_path"
     return 0
   fi
-  # endregion
 
-  # region Argument mode
-  #
-  # No piped stdin: the remaining positional args become the payload.
-  # Empty argv at this point means the user invoked `copy` with no
-  # input at all, which is a usage error.
-  if [[ $# -eq 0 ]]; then
-    [[ -n $prelude_file ]] && rm -f -- "$prelude_file"
-
-    local error_msg='No input provided. '
-    error_msg+='Pass text as arguments or pipe via stdin.'
-
-    __cp_usage >&2
-    __cp_error "$error_msg" \
-      "$COPY_ERR_USAGE" \
-      || return "$?"
+  if [[ $# -gt 0 ]]; then
+    # Argument mode: same join-with-spaces convention as the
+    # argument-mode branch in copy() so the sniffer sees exactly
+    # the bytes that would otherwise reach the backend.
+    (
+      IFS=' '
+      echo "$*"
+    ) >"$_buffer_path"
+    return 0
   fi
 
-  # Join arguments with single spaces, mirroring `echo "$*"` semantics.
-  # Done in a subshell so the temporary `IFS=' '` does not affect
-  # the surrounding code (which keeps `IFS=$'\n\t'`).
-  local -r input_text="$(
-    IFS=' '
-    echo "$*"
-  )"
+  rm -f -- "$_buffer_path"
+  _buffer_path=''
 
-  (
-    set -o pipefail
-    printf '%s' "$input_text" \
-      | __cp_emit_with_prelude \
-      | __cp_emit "$raw_mode" "$trim_mode" "${clipboard_backend_cmd[@]}"
-  ) || emit_rc="$?"
-  [[ -n $prelude_file ]] && rm -f -- "$prelude_file"
+  local error_msg='No input provided. '
+  error_msg+='Pass text as arguments or pipe via stdin.'
+  __cp_usage >&2
+  __cp_error "$error_msg" \
+    "$COPY_ERR_USAGE" \
+    || return "$?"
+}
+
+#######################################
+# Stream a buffered file straight to the backend, no transforms.
+#
+# Used for binary auto-detected payloads (PNG/JPEG/...) that
+# must not pass through the ANSI/trim pipeline.
+# The buffer is removed on every exit path before returning.
+#
+# Arguments:
+#   1:    path to the buffered file.
+#   2..N: backend argv to invoke.
+#
+# Returns:
+#   0: on success.
+#   COPY_ERR_BACKEND_FAILED: if the backend exits non-zero.
+#######################################
+function __cp_emit_buffer_raw() {
+  local -r buffer_path="$1"
+  shift
+
+  local -i emit_rc=0
+  "$@" <"$buffer_path" || emit_rc=$?
+  rm -f -- "$buffer_path"
 
   if ((emit_rc != 0)); then
     __cp_error 'Clipboard backend failed.' \
       "$COPY_ERR_BACKEND_FAILED" \
       || return "$?"
   fi
-  # endregion
+}
+
+# endregion
+
+# region Auto-detection orchestration
+
+#######################################
+# Run MIME sniffing on the buffered payload and dispatch.
+#
+# Side effects, depending on the sniffer's verdict:
+#   - Binary MIME (image/*, ...):
+#     applies the MIME to the backend, streams the buffer,
+#     and signals 'done' to the caller via rc=200.
+#   - text/plain:
+#     consumes the buffer by re-binding it as the function's stdin
+#     (`exec < "$buffer"`),
+#     so the regular pipe path downstream sees the same bytes.
+#
+# Arguments:
+#   1: nameref to the backend command array.
+#   2: path to the buffered payload.
+#   3: debug_mode flag (int; 0 = silent, 1 = log auto-detect events).
+#
+# Returns:
+#   0:   text path was selected; caller continues to the prelude
+#        and pipe-mode pipeline.
+#   200: binary path was selected and the write completed;
+#        caller should return 0 to its own caller.
+#   COPY_ERR_TYPE_MISMATCH:  binary MIME but xsel backend.
+#   COPY_ERR_BACKEND_FAILED: backend write failed.
+#######################################
+function __cp_run_auto_detect() {
+  local -n _backend="$1"
+  local -r buffer_path="$2"
+  local -ir debug_mode=$3
+
+  local sniffed_mime
+  sniffed_mime="$(__cp_sniff_mime "$buffer_path")"
+
+  __cp_debug "$debug_mode" 'auto-detect' "mime=${sniffed_mime}"
+
+  if [[ "$sniffed_mime" == 'text/plain' ]]; then
+    # Text path: hand the bytes back to the regular pipeline
+    # by replacing this function's stdin with the buffered file.
+    __cp_debug "$debug_mode" 'auto-detect-text' \
+      'action=fall-through-to-pipeline'
+    exec <"$buffer_path"
+    rm -f -- "$buffer_path"
+    return 0
+  fi
+
+  # Binary path.
+  if ! __cp_apply_mime _backend "$sniffed_mime"; then
+    local -ir mime_rc=$?
+    rm -f -- "$buffer_path"
+    return "$mime_rc"
+  fi
+
+  __cp_debug "$debug_mode" 'auto-detect-binary' \
+    "mime=${sniffed_mime}" 'action=stream-buffer'
+
+  __cp_emit_buffer_raw "$buffer_path" "${_backend[@]}" \
+    || return "$?"
+
+  # Sentinel: 'binary path completed, copy() should return 0'.
+  return 200
+}
+
+# endregion
+
+# region Append prelude
+
+#######################################
+# Snapshot the current clipboard content into a temp file
+# so that --append can prefix it before writing back.
+#
+# Arguments:
+#   1: nameref to a string sink that receives the file path
+#      (empty string when --append was not requested).
+#   2: append_mode flag (int).
+#
+# Returns:
+#   0: on success or when --append was not requested.
+#   COPY_ERR_BACKEND_FAILED: when reading the clipboard fails.
+#######################################
+function __cp_capture_prelude() {
+  local -n _prelude_path="$1"
+  local -ir append_mode=$2
+
+  _prelude_path=''
+  if ((!append_mode)); then
+    return 0
+  fi
+
+  _prelude_path="$(mktemp -t copy-append.XXXXXX)"
+  if ! __cp_read_clipboard >"$_prelude_path"; then
+    rm -f -- "$_prelude_path"
+    _prelude_path=''
+    __cp_error \
+      'Failed to read existing clipboard for --append' \
+      "$COPY_ERR_BACKEND_FAILED" \
+      || return "$?"
+  fi
+}
+
+#######################################
+# Stream prelude (if any) followed by stdin.
+#
+# Defined as a function so that the surrounding `set -o pipefail`
+# subshell can chain it into __cp_emit cleanly.
+# The prelude itself is NEVER passed through ANSI stripping
+# or trimming, because it represents the existing clipboard text
+# we already trust; only the new payload is transformed downstream.
+#
+# Arguments:
+#   1: path to the prelude file (may be empty for no prelude).
+#######################################
+function __cp_stream_with_prelude() {
+  local -r prelude_path="$1"
+
+  if [[ -n $prelude_path ]]; then
+    cat -- "$prelude_path"
+  fi
+  cat
+}
+
+# endregion
+
+# region Pipeline runners
+
+#######################################
+# Run the transformation+write pipeline under pipefail.
+#
+# The pipeline is:
+#
+#     <stdin> | __cp_stream_with_prelude
+#             | __cp_emit raw trim -- backend...
+#
+# `set -o pipefail` is scoped to the subshell so it does not leak
+# into the caller's shell. We use the `cmd || rc=$?` pattern instead
+# of `if ! ( ... )` because the latter clobbers `$?` with the
+# inversion result and we lose the subshell's true exit code.
+#
+# Arguments:
+#   1:    raw_mode flag.
+#   2:    trim_mode flag.
+#   3:    prelude path (may be empty).
+#   4..N: backend argv.
+#
+# Returns:
+#   0: on success.
+#   COPY_ERR_BACKEND_FAILED: if any pipeline stage failed.
+#######################################
+function __cp_run_pipeline() {
+  local -ir raw_mode=$1
+  local -ir trim_mode=$2
+  local -r prelude_path="$3"
+  shift 3
+
+  local -i emit_rc=0
+  (
+    set -o pipefail
+    __cp_stream_with_prelude "$prelude_path" \
+      | __cp_emit "$raw_mode" "$trim_mode" "$@"
+  ) || emit_rc=$?
+
+  if ((emit_rc != 0)); then
+    __cp_error 'Clipboard backend failed during pipe operation.' \
+      "$COPY_ERR_BACKEND_FAILED" \
+      || return "$?"
+  fi
+}
+
+#######################################
+# Argument-mode wrapper around __cp_run_pipeline.
+#
+# Joins the leftover positional args with single spaces
+# (`echo "$*"` semantics)
+# and feeds the joined string to the same pipeline used by pipe mode.
+# The temporary `IFS=' '` lives in a subshell to avoid disturbing
+# the caller's IFS.
+#
+# Arguments:
+#   1:    raw_mode flag.
+#   2:    trim_mode flag.
+#   3:    prelude path (may be empty).
+#   4:    nameref to the backend command array.
+#   5..N: positional words to copy.
+#
+# Returns:
+#   0: on success.
+#   COPY_ERR_USAGE: on no positional words at all.
+#   COPY_ERR_BACKEND_FAILED: pipeline failures bubble up.
+#######################################
+function __cp_run_argument_mode() {
+  local -ir raw_mode=$1
+  local -ir trim_mode=$2
+  local -r prelude_path="$3"
+  local -n _backend="$4"
+  shift 4
+
+  if [[ $# -eq 0 ]]; then
+    local error_msg='No input provided. '
+    error_msg+='Pass text as arguments or pipe via stdin.'
+    __cp_usage >&2
+    __cp_error "$error_msg" \
+      "$COPY_ERR_USAGE" \
+      || return "$?"
+  fi
+
+  local input_text
+  input_text="$(
+    IFS=' '
+    echo "$*"
+  )"
+
+  local -i emit_rc=0
+  (
+    set -o pipefail
+    printf '%s' "$input_text" \
+      | __cp_stream_with_prelude "$prelude_path" \
+      | __cp_emit "$raw_mode" "$trim_mode" "${_backend[@]}"
+  ) || emit_rc=$?
+
+  if ((emit_rc != 0)); then
+    __cp_error 'Clipboard backend failed.' \
+      "$COPY_ERR_BACKEND_FAILED" \
+      || return "$?"
+  fi
+}
+
+# endregion
+
+# region Public API
+
+#######################################
+# Main function to write to clipboard.
+#
+# Thin orchestrator: every step lives in its own helper above,
+# so this body reads as a sequence of named phases.
+# State is kept on the local stack and threaded through helpers
+# via Bash namerefs (parameters whose names start with `_`).
+# No global state is used; each invocation gets a fresh slate.
+#
+# Arguments:
+#   [options] [text...] or read from stdin.
+#
+# Options:
+#   See __cp_usage for the authoritative list.
+#
+# Returns:
+#   0: on success.
+#   Non-zero: on error (see header for code list).
+#######################################
+function copy() {
+  # Restrict word splitting to newline/tab inside this function.
+  # Stops accidental space-splitting on user input, while still
+  # allowing arrays-from-newlines patterns where they are intended.
+  # Helpers that need space-joining (echo "$*") override IFS locally.
+  local IFS=$'\n\t'
+
+  # Phase 1: option struct.
+  local -i raw_mode trim_mode append_mode auto_mode debug_mode
+  local mime_type
+  __cp_init_options \
+    raw_mode trim_mode append_mode auto_mode debug_mode mime_type
+
+  # Phase 2: parse argv.
+  local -a positional=()
+  local -i parse_rc=0
+  __cp_parse_args \
+    raw_mode trim_mode append_mode auto_mode debug_mode \
+    mime_type positional \
+    "$@" \
+    || parse_rc=$?
+
+  if ((parse_rc == 200)); then
+    # --help was consumed; usage already printed.
+    return 0
+  fi
+  if ((parse_rc != 0)); then
+    return "$parse_rc"
+  fi
+
+  __cp_debug "$debug_mode" 'options-parsed' \
+    "raw=${raw_mode}" "trim=${trim_mode}" \
+    "append=${append_mode}" "auto=${auto_mode}" \
+    "mime=${mime_type:-<none>}" \
+    "positional-count=${#positional[@]}"
+
+  # Phase 3: cross-option compatibility + auto-mode reconciliation.
+  __cp_validate_options auto_mode \
+    "$append_mode" "$trim_mode" "$mime_type" \
+    || return "$?"
+
+  __cp_debug "$debug_mode" 'options-validated' \
+    "auto=${auto_mode}"
+
+  # Phase 4: backend resolution (+ explicit --type application).
+  local -a backend_cmd
+  __cp_resolve_backend backend_cmd "$mime_type" || return "$?"
+
+  __cp_debug "$debug_mode" 'backend-resolved' \
+    "backend=${backend_cmd[0]}"
+
+  # Phase 5: optional auto-detection, which can short-circuit
+  # on a binary verdict and complete the write itself.
+  if ((auto_mode)); then
+    local sniff_buffer=''
+    __cp_buffer_input sniff_buffer "${positional[@]}" \
+      || return "$?"
+
+    __cp_debug "$debug_mode" 'auto-detect-start' \
+      "buffer=${sniff_buffer}"
+
+    local -i auto_rc=0
+    __cp_run_auto_detect backend_cmd "$sniff_buffer" "$debug_mode" \
+      || auto_rc=$?
+
+    if ((auto_rc == 200)); then
+      # Binary path completed the write inside the helper.
+      __cp_debug "$debug_mode" 'done' 'mode=auto-binary'
+      return 0
+    fi
+    if ((auto_rc != 0)); then
+      return "$auto_rc"
+    fi
+    # Text path: stdin now points at the buffered file,
+    # the original argv-based payload is therefore gone,
+    # so we fall through to pipe mode below regardless of how
+    # the user originally supplied the input.
+    positional=()
+  fi
+
+  # Phase 6: optional --append prelude.
+  local prelude_file=''
+  __cp_capture_prelude prelude_file "$append_mode" || return "$?"
+
+  if ((append_mode)); then
+    __cp_debug "$debug_mode" 'prelude-captured' \
+      "path=${prelude_file}"
+  fi
+
+  # Phase 7: dispatch to pipe mode or argument mode.
+  # The trap-style cleanup below ensures the prelude file
+  # is removed on every exit path of the function.
+  local -i write_rc=0
+  if [[ ! -t 0 ]] || ((auto_mode)); then
+    # auto_mode flips us to pipe mode because Phase 5 already
+    # bound the buffered file to stdin via `exec < "$buffer"`.
+    __cp_debug "$debug_mode" 'pipeline-start' 'mode=pipe'
+    __cp_run_pipeline \
+      "$raw_mode" "$trim_mode" "$prelude_file" \
+      "${backend_cmd[@]}" \
+      || write_rc=$?
+  else
+    __cp_debug "$debug_mode" 'pipeline-start' 'mode=argument'
+    __cp_run_argument_mode \
+      "$raw_mode" "$trim_mode" "$prelude_file" \
+      backend_cmd \
+      "${positional[@]}" \
+      || write_rc=$?
+  fi
+
+  [[ -n $prelude_file ]] && rm -f -- "$prelude_file"
+
+  if ((write_rc == 0)); then
+    __cp_debug "$debug_mode" 'done' 'mode=pipeline'
+  fi
+
+  return "$write_rc"
 }
 
 # endregion

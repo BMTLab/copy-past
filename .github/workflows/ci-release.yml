@@ -245,6 +245,24 @@ jobs:
           }
 
           #######################################
+          # Surface key archive metadata as an annotation
+          # (size, file count) so reviewers can spot drift
+          # without expanding the log group.
+          #
+          # Arguments:
+          #   1: archive file path.
+          #######################################
+          function announce_archive() {
+            local -r path="$1"
+
+            local size entries
+            size="$(du -h "$path" | cut -f1)"
+            entries="$(tar -tzf "$path" | wc -l)"
+
+            echo "::notice title=Archive::${path} (${size}, ${entries} entries)"
+          }
+
+          #######################################
           # Entrypoint.
           #
           # Globals:
@@ -256,6 +274,7 @@ jobs:
             build_tarball "$TAG" "$ARCHIVE_NAME" "$archive"
             write_sha256 "$archive"
             preview_archive "$archive"
+            announce_archive "$archive"
           }
 
           main "$@"
@@ -266,18 +285,12 @@ jobs:
         with:
           tag_name: ${{ inputs.version }}
           name: ${{ inputs.version }}
-          # When release-please is in charge of versioning,
-          # the GitHub Release for this tag already exists
-          # and carries a hand-curated body taken from CHANGELOG.md.
-          # softprops/action-gh-release@v3 will reuse that release
-          # and only attach the new files;
-          # we therefore do NOT generate notes here,
-          # so that we never overwrite the changelog body.
-          #
-          # If you adopt this workflow without release-please,
-          # set `generate_release_notes: true` to fall back to
-          # GitHub's auto-generated notes.
-          generate_release_notes: false
+          # We let GitHub auto-generate release notes from the
+          # commit history between the previous tag and this one.
+          # CHANGELOG.md (when maintained by hand) can be linked
+          # from the release body; we do not duplicate its content
+          # in the release UI to avoid drift.
+          generate_release_notes: true
           append_body: false
           # Release the tarball before the .sha256,
           # so the checksum entry on the release page
@@ -291,6 +304,14 @@ jobs:
             ${{ env.ARCHIVE_NAME }}.tar.gz
             ${{ env.ARCHIVE_NAME }}.tar.gz.sha256
           fail_on_unmatched_files: true
+
+      - name: 🔗 Announce GitHub Release
+        if: ${{ steps.create-release.outputs.url != '' }}
+        env:
+          RELEASE_URL: ${{ steps.create-release.outputs.url }}
+          TAG: ${{ inputs.version }}
+        run: |
+          echo "::notice title=Release::${TAG} published at ${RELEASE_URL}"
 
       # Build provenance creates a sigstore-signed SLSA attestation
       # tied to the workflow that produced the tarball.
@@ -306,6 +327,13 @@ jobs:
         uses: actions/attest-build-provenance@v4
         with:
           subject-checksums: ${{ env.ARCHIVE_NAME }}.tar.gz.sha256
+
+      - name: 🔗 Announce attestation
+        if: ${{ steps.provenance.outputs.attestation-url != '' }}
+        env:
+          ATTESTATION_URL: ${{ steps.provenance.outputs.attestation-url }}
+        run: |
+          echo "::notice title=SLSA::Build provenance attestation: ${ATTESTATION_URL}"
 
       - name: 📊 Summary
         if: ${{ always() }}

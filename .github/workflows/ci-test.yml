@@ -63,7 +63,7 @@ jobs:
           # for upload-artifact and cache steps later in the matrix.
           persist-credentials: false
 
-      # ─── Tool installation per platform ──────────────────────
+# region Tool installation per platform
       #
       # We install bats-core from git (pinned tag), not from apt.
       #
@@ -152,6 +152,8 @@ jobs:
           install_runtime_tools
           install_bats_from_source "$BATS_VERSION" /usr/local
 
+          echo "::notice title=Tool setup (Linux)::bats ${BATS_VERSION}, xclip, xvfb installed"
+
       - name: 🔧 Install bats + xxd (macOS)
         if: ${{ matrix.install == 'brew' }}
         run: |
@@ -163,6 +165,8 @@ jobs:
           brew install bats-core
           echo '::endgroup::'
 
+          echo "::notice title=Tool setup (macOS)::bats $(bats --version | awk '{print $NF}') from Homebrew"
+
       - name: ℹ️ Environment
         run: |
           echo '::group::Versions'
@@ -172,7 +176,14 @@ jobs:
           xxd --version 2>&1 | head -n1 || true
           echo '::endgroup::'
 
-      # ─── Primary gate: hermetic bats suite ───────────────────
+          # Aggregate the most relevant versions into a single
+          # annotation so reviewers can spot bash/bats drift
+          # across the matrix without expanding individual log groups.
+          bash_version="$(bash --version | head -n1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n1)"
+          bats_version="$(bats --version | awk '{print $NF}')"
+          echo "::notice title=Environment (${{ matrix.os }})::bash ${bash_version}, bats ${bats_version}"
+
+# region Primary gate: hermetic bats suite
       - name: 🧪 Run bats (hermetic, fake backend)
         run: |
           set -o errexit -o nounset -o pipefail
@@ -190,11 +201,46 @@ jobs:
           # alongside the human-readable TAP output,
           # so the GitHub UI can render the per-test status natively.
           bats \
+            --recursive \
             --report-formatter junit \
             --output "$BATS_RESULTS_DIR" \
-            tests/bats/
+            tests/
 
-      # ─── Optional: real-backend smoke test ───────────────────
+          # Tally the results across every emitted JUnit file
+          # so the run-summary annotation reflects the real total,
+          # not whatever the last file happened to contain.
+          # `awk` lets us sum integer attributes
+          # (tests=, failures=, errors=, skipped=)
+          # without parsing the XML structurally.
+          if compgen -G "$BATS_RESULTS_DIR/*.xml" >/dev/null; then
+            read -r total failures errors skipped < <(
+              awk -v RS='<testsuite' '
+                NR > 1 {
+                  match($0, /tests="[0-9]+"/);     t += substr($0, RSTART+7, RLENGTH-8) + 0
+                  match($0, /failures="[0-9]+"/);  f += substr($0, RSTART+10, RLENGTH-11) + 0
+                  match($0, /errors="[0-9]+"/);    e += substr($0, RSTART+8, RLENGTH-9) + 0
+                  match($0, /skipped="[0-9]+"/);   s += substr($0, RSTART+9, RLENGTH-10) + 0
+                }
+                END { print t+0, f+0, e+0, s+0 }
+              ' "$BATS_RESULTS_DIR"/*.xml
+            )
+
+            if (( failures + errors > 0 )); then
+              # Hermetic suite is the primary gate: any failure is hard.
+              echo "::error title=bats::${failures} failed, ${errors} errored across ${total} tests"
+              exit 1
+            fi
+
+            if (( skipped > 0 )); then
+              echo "::warning title=bats::${skipped} of ${total} tests were skipped (likely missing optional tooling like jq)"
+            fi
+
+            echo "::notice title=bats (${{ matrix.os }})::${total} tests passed (${skipped} skipped)"
+          else
+            echo "::warning title=bats::No JUnit XML produced; verify the suite actually ran"
+          fi
+
+# region Optional: real-backend smoke test
       #
       # Linux: spin up a virtual X11 display via xvfb-run,
       # run a tiny round-trip through real xclip,
@@ -258,11 +304,13 @@ jobs:
       # and Homebrew xclip on macOS is non-functional without XQuartz.
       # We skip the real-backend smoke there;
       # the hermetic suite still validates all logic paths.
+      # Surfaced as a `::warning` (not `::notice`) so the run summary
+      # makes the missing coverage visible rather than burying it.
       - name: 🌀 Real-backend smoke (macOS)
         if: ${{ runner.os == 'macOS' }}
-        run: echo '::notice::Real-backend smoke skipped on macOS (no clipboard tool installed)'
+        run: echo '::warning title=Real-backend smoke::Skipped on macOS (no clipboard tool installed); hermetic suite is the primary gate'
 
-      # ─── Artifacts & summary ─────────────────────────────────
+# region Artifacts & summary
       - name: 📤 Upload bats results
         if: ${{ always() }}
         id: upload-results
@@ -280,6 +328,18 @@ jobs:
           # but we set it explicitly so future tooling changes
           # do not silently regress to a slower default.
           compression-level: 6
+
+      # Surface the artifact URL as a notice so PR reviewers
+      # can jump straight to the JUnit XML without expanding
+      # the run-summary block.
+      # Skipped on workflow re-runs where the upload step
+      # was not triggered (e.g. cancelled jobs).
+      - name: 🔗 Announce artifact
+        if: ${{ always() && steps.upload-results.outputs.artifact-url != '' }}
+        env:
+          ARTIFACT_URL: ${{ steps.upload-results.outputs.artifact-url }}
+        run: |
+          echo "::notice title=Artifact (${{ matrix.os }})::bats results: ${ARTIFACT_URL}"
 
       - name: 📊 Summary
         if: ${{ always() }}

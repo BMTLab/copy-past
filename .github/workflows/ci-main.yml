@@ -28,12 +28,9 @@ on:
       - 'LICENSE'
       - 'CODE_OF_CONDUCT.md'
       - 'SECURITY.md'
-      - 'CONTRIBUTING.md'
-      # release-please owns these files exclusively;
-      # bumping them never affects the build.
+      # CHANGELOG is curated by hand;
+      # bumping it never affects the build.
       - 'CHANGELOG.md'
-      - 'release-please-config.json'
-      - '.release-please-manifest.json'
 
   push:
     branches: *tracked-branches
@@ -52,11 +49,6 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
   cancel-in-progress: true
 
-# Set default, read-only permissions for all jobs in this workflow.
-# This establishes a secure-by-default baseline,
-# following the principle of least privilege.
-# Any job that needs more permissions
-# must override this block explicitly.
 permissions:
   contents: read
 

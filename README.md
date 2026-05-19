@@ -206,10 +206,42 @@ export COPY_PAST_BACKEND=wl-clipboard    # whole shell session
 Accepted values: `wl-clipboard` (or `wayland`), `xclip`, `xsel`.
 Unknown values fail with `COPY_ERR_USAGE` / `PAST_ERR_USAGE`.
 
-> [!NOTE]
-> `xsel` does not support MIME types,
-> so non-text payloads (`--json`, `--image`)
-> need `wl-clipboard` or `xclip`.
+### Feature support matrix
+
+| Feature                  | `wl-clipboard` | `xclip` | `xsel` |
+| ------------------------ | :------------: | :-----: | :----: |
+| Plain text round-trip    |       ✅       |   ✅    |   ✅   |
+| `--type MIME`            |       ✅       |   ✅    |   ❌   |
+| `-j` / `--json`          |       ✅       |   ✅    |   ❌   |
+| `--image[=FORMAT]`       |       ✅       |   ✅    |   ❌   |
+| Auto-detected MIME       |       ✅       |   ✅    |   ❌   |
+
+`xsel` is text-only by design.
+Asking for a non-text MIME on `xsel` fails fast
+with `COPY_ERR_TYPE_MISMATCH` (rc=5).
+
+---
+
+## Debug logging
+
+Pass `-d`, `--debug`, or `--verbose` to either tool
+to print structured event lines on stderr:
+
+```text
+[copy debug] event=options-parsed raw=0 trim=0 append=1 auto=1 mime=<none> positional-count=0
+[copy debug] event=options-validated auto=0
+[copy debug] event=backend-resolved backend=wl-copy
+[copy debug] event=auto-detect mime=image/png
+[copy debug] event=done mode=auto-binary
+```
+
+The format is a stable contract:
+each line starts with `[copy debug]` or `[past debug]`,
+followed by `event=NAME` and zero-or-more `key=value` pairs.
+Values that contain whitespace are wrapped in single quotes.
+
+Without the flag, the tools emit nothing on stderr,
+so existing pipelines are unaffected.
 
 ---
 
@@ -263,28 +295,36 @@ to a local clipboard service.
 ## Development
 
 ```bash
-make check         # lint + format-check + tests (CI gate)
-make test          # bats suite only
-make lint          # shellcheck only
-make format        # rewrite scripts with shfmt
-make check-deps    # show runtime + dev tooling status
+make check             # lint + format-check + tests (CI gate)
+make test              # full bats suite (unit + integration)
+make test-unit         # unit suite only (fast)
+make test-integration  # integration suite only
+make lint              # shellcheck only
+make format            # rewrite scripts with shfmt
+make check-deps        # show runtime + dev tooling status
 ```
 
 Test layout:
 
 ```
-tests/bats/
-├── test_helper.bash       # shared fake-backend setup
-├── test_copy.bats         # copy options & error paths
-├── test_past.bats         # past options & error paths
-├── test_features.bats     # append / trim / json / image / auto-detect
-├── test_roundtrip.bats    # copy → past byte-fidelity
-├── test_robustness.bats   # regression tests
-└── test_code_style.bats   # shellcheck / shfmt / header gate
+tests/
+├── support/test_helper.bash
+├── unit/
+│   ├── test_options.bats      # parsers, validate
+│   ├── test_mime.bats         # classify, sniff, apply, resolve
+│   ├── test_text.bats         # ANSI strip + whitespace trim
+│   ├── test_pipeline.bats     # buffer, prelude, stream
+│   └── test_debug_log.bats    # __cp_debug / __ps_debug
+└── integration/
+    ├── test_copy.bats         # copy options & error paths
+    ├── test_past.bats         # past options & error paths
+    ├── test_features.bats     # append / trim / json / image / auto-detect
+    ├── test_debug_flag.bats   # --debug end-to-end coverage
+    ├── test_backends.bats     # per-backend feature matrix
+    ├── test_roundtrip.bats    # copy → past byte fidelity
+    ├── test_regressions.bats  # historical bug-fix pins
+    └── test_code_style.bats   # shellcheck / shfmt / header gate
 ```
-
-See [CONTRIBUTING.md](./CONTRIBUTING.md) for the code style,
-commit conventions, and release process.
 
 ---
 

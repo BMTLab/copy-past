@@ -84,5 +84,3 @@ LICENSE         linguist-generated
 .vscode/        export-ignore
 tests/          export-ignore
 .editorconfig   export-ignore
-release-please-config.json    export-ignore
-.release-please-manifest.json export-ignore

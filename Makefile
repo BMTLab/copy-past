@@ -10,7 +10,7 @@
 
 # ─── Project metadata ────────────────────────────────────────────────────
 PROJECT_NAME    := copy-past
-PROJECT_VERSION := 1.4.0 # x-release-please-version
+PROJECT_VERSION := $(shell awk '/^# Version: [0-9]+\.[0-9]+\.[0-9]+/ { print $$3; exit }' copy.sh)
 SCRIPTS         := copy.sh past.sh
 
 
@@ -56,7 +56,7 @@ endif
 # so user-local installs never prompt for a password.
 #
 # We compute this with $(filter) on directory prefixes
-# rather than $(shell case … esac),
+# rather than $(shell case ... esac),
 # because $(shell) uses /bin/sh and tends to choke
 # on the quoting required for a multi-line case statement.
 NEEDS_SUDO := $(or \
@@ -77,7 +77,7 @@ ifeq ($(strip $(NO_COLOR)),)
 endif
 
 
-# ─── Reusable log helpers (callable via $(call …)) ───────────────────────
+# ─── Reusable log helpers (callable via $(call ...)) ───────────────────────
 define log_step
 	@printf '  $(C_CYAN)→$(C_RESET) %s\n' $(1)
 endef
@@ -237,18 +237,26 @@ format-check:  ## Verify shfmt formatting without writing
 
 test:  ## Run the full bats suite
 	$(call log_step,'bats')
-	@$(BATS) tests/bats/
+	@$(BATS) -r tests/
 
 test-verbose:  ## Run bats with verbose / on-failure-print output
-	@$(BATS) --verbose-run --print-output-on-failure tests/bats/
+	@$(BATS) -r --verbose-run --print-output-on-failure tests/
+
+test-unit:  ## Run unit tests only (fast)
+	$(call log_step,'bats: unit')
+	@$(BATS) -r tests/unit/
+
+test-integration:  ## Run integration tests only
+	$(call log_step,'bats: integration')
+	@$(BATS) -r tests/integration/
 
 test-watch:  ## Re-run bats on every change (needs `entr` or `fswatch`)
 	@if command -v entr > /dev/null 2>&1; then \
 		printf '  $(C_CYAN)→$(C_RESET) watching with entr (Ctrl-C to stop)\n'; \
-		find $(SCRIPTS) tests -type f | entr -c $(BATS) tests/bats/; \
+		find $(SCRIPTS) tests -type f | entr -c $(BATS) -r tests/; \
 	elif command -v fswatch > /dev/null 2>&1; then \
 		printf '  $(C_CYAN)→$(C_RESET) watching with fswatch (Ctrl-C to stop)\n'; \
-		fswatch -o $(SCRIPTS) tests | xargs -n1 -I{} $(BATS) tests/bats/; \
+		fswatch -o $(SCRIPTS) tests | xargs -n1 -I{} $(BATS) -r tests/; \
 	else \
 		printf '  $(C_RED)✗$(C_RESET) need `entr` or `fswatch` for watch mode\n' >&2; \
 		exit 1; \

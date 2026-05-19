@@ -1,7 +1,7 @@
 # .github/workflows/ci-lint.yml
 #
 # Runs shellcheck + shfmt
-# plus the custom style gates defined in tests/bats/test_code_style.bats.
+# plus the custom style gates defined in tests/integration/test_code_style.bats.
 # Adds a build-info section to the run summary,
 # so reviewers can see exactly which versions of the tools produced the verdict.
 
@@ -53,6 +53,8 @@ jobs:
             bats
           echo '::endgroup::'
 
+          echo '::notice title=Lint setup::Installed shellcheck, shfmt, bats'
+
       - name: ℹ️ Tool versions
         run: |
           echo '::group::Versions'
@@ -62,20 +64,37 @@ jobs:
           bats --version
           echo '::endgroup::'
 
+          # Surface the actual versions on the run summary,
+          # so reviewers can see which toolchain produced the verdict
+          # without expanding the log group.
+          shellcheck_v="$(shellcheck --version | grep -oE 'version: [0-9.]+' | head -n1)"
+          shfmt_v="v$(shfmt --version)"
+          bats_v="$(bats --version)"
+          echo "::notice title=Tool versions::shellcheck ${shellcheck_v}, shfmt ${shfmt_v}, ${bats_v}"
+
       # The Makefile encapsulates the exact lint commands used locally,
       # so CI matches `make check` byte-for-byte.
       - name: 🔍 shellcheck
-        run: make lint
+        run: |
+          set -o errexit -o nounset -o pipefail
+          make lint
+          echo '::notice title=shellcheck::No findings on copy.sh / past.sh'
 
       - name: 🎨 shfmt
-        run: make format-check
+        run: |
+          set -o errexit -o nounset -o pipefail
+          make format-check
+          echo '::notice title=shfmt::Formatting matches the project style'
 
       # Runs ONLY the style-gate bats file,
       # which checks the cdl-style header convention,
       # the presence of Version/Date,
       # and the shfmt diff (idempotency check).
       - name: 🧪 Custom style gate (bats)
-        run: bats tests/bats/test_code_style.bats
+        run: |
+          set -o errexit -o nounset -o pipefail
+          bats tests/integration/test_code_style.bats
+          echo '::notice title=Style gate::Headers + shfmt-idempotency checks passed'
 
       - name: 📊 Summary
         if: ${{ always() }}
