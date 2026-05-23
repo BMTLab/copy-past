@@ -2,8 +2,8 @@
 
 # Name: past.sh
 # Author: Nikita Neverov (BMTLab)
-# Version: 1.4.0
-# Date: 2026-05-17
+# Version: 2.0.0
+# Date: 2026-07-03
 # License: MIT
 #
 # Description:
@@ -14,8 +14,9 @@
 #   Behavior:
 #     - Prints content 'as is' without appending an extra newline
 #       (unless the clipboard content itself has one).
-#     - On Wayland uses `wl-paste` and strips
-#       the single trailing newline that wl-paste appends,
+#     - On Wayland uses `wl-paste`
+#       and strips the single trailing newline
+#       that wl-paste appends,
 #       while preserving any original trailing newlines.
 #       This is a workaround for wl-clipboard ≤ 2.2.1,
 #       where `--no-newline` truncates the last line
@@ -34,7 +35,7 @@
 #   Backend override:
 #     - Set COPY_PAST_BACKEND={wl-clipboard|xclip|xsel}
 #       to force a specific backend.
-#       The same variable is honoured by copy.sh,
+#       The same variable is honored by copy.sh,
 #       so both halves of a round-trip stay consistent.
 #       xsel does not support MIME types,
 #       so non-text payloads fall back to an error there.
@@ -43,8 +44,8 @@
 #     - --debug (alias -d / --verbose) emits structured event lines
 #       on stderr, prefixed with '[past debug]'.
 #       Format: '[past debug] event=<name> key=value key=value'.
-#       The flag is silent by default, so existing pipelines
-#       are not disturbed.
+#       The flag is silent by default,
+#       so existing pipelines are not disturbed.
 #
 # Usage:
 #   # As a standalone script:
@@ -69,7 +70,7 @@
 #      The clipboard utility returned a non-zero exit code.
 #   5: PAST_ERR_TYPE_MISMATCH
 #      The active backend cannot handle the requested MIME type
-#      (e.g. xsel + --json).
+#      (e.g., xsel + --json).
 #
 # Disclaimer:
 #   This script is provided 'as is', without any warranty.
@@ -77,10 +78,11 @@
 #   are installed on your system.
 
 # region Error codes
-#
+
 # These constants are guarded against re-declaration,
 # so the script can be sourced repeatedly in the same shell
 # without tripping `readonly`.
+
 # bashsupport disable=BP5001
 
 if [[ -z ${PAST_ERR_GENERAL+x} ]]; then
@@ -131,7 +133,7 @@ Usage:
 Options:
   -h, --help            Show this help message.
       --type MIME       Request a specific MIME type from the backend
-                        (e.g. application/json, image/png, text/html).
+                        (e.g., application/json, image/png, text/html).
   -j, --json            Shortcut for --type application/json.
       --image[=FORMAT]  Read binary image data with the matching
                         image/<format> MIME type (default png).
@@ -240,10 +242,11 @@ function __ps_have_cmd() {
 #######################################
 # Detect the best available clipboard 'read' backend.
 #
-# When COPY_PAST_BACKEND is set, that backend is used (and its
-# absence is a hard error). Otherwise we prefer Wayland's wl-paste
-# when a Wayland session is detected, then fall back to xclip,
-# then xsel.
+# When COPY_PAST_BACKEND is set, that backend is used
+# (and its absence is a hard error).
+# Otherwise we prefer Wayland's wl-paste
+# when a Wayland session is detected,
+# then fall back to xclip, then xsel.
 #
 # Arguments:
 #   1: Name of the array variable (nameref) to store the command.
@@ -258,11 +261,14 @@ function __ps_detect_backend() {
 
   # Step 1: honour an explicit override (env var).
   #
-  # We deliberately omit --no-newline here, because wl-paste 2.2.1
-  # has a known bug: it drops the last line when the clipboard
-  # content does not end with \n. Instead, we always run wl-paste
-  # in its default mode (which appends one \n) and cancel that
-  # trailing byte ourselves in __ps_read_wl_paste below.
+  # We deliberately omit --no-newline here,
+  # because wl-paste 2.2.1 has a known bug:
+  # it drops the last line
+  # when the clipboard content does not end with \n.
+  # Instead, we always run wl-paste in its default mode
+  # (which appends one \n)
+  # and cancel that trailing byte ourselves
+  # in __ps_read_wl_paste below.
   case "${COPY_PAST_BACKEND-}" in
     '') ;; # No override; fall through to auto-detection below.
 
@@ -424,12 +430,12 @@ function __ps_read_wl_paste() {
 # region Option model
 
 #######################################
-# Initialise the past option struct to its defaults.
+# Initialize the past option struct to its defaults.
 #
-# State is kept on the caller's stack (no globals) and threaded
-# into helpers via Bash namerefs. Each `past` invocation therefore
-# starts from a clean slate, even when the script is sourced
-# into a long-lived shell.
+# State is kept on the caller's stack (no globals)
+# and threaded into helpers via Bash namerefs.
+# Each `past` invocation therefore starts from a clean slate,
+# even when the script is sourced into a long-lived shell.
 #
 # Arguments:
 #   1: nameref to mime_type      (string, '' default).
@@ -655,7 +661,7 @@ function __ps_classify_mime() {
 #   PAST_ERR_USAGE: on unknown COPY_PAST_BACKEND override.
 #   PAST_ERR_NO_BACKEND: when no backend is installed.
 #   PAST_ERR_TYPE_MISMATCH: when the MIME flag is incompatible
-#                           with the chosen backend (e.g. xsel).
+#                           with the chosen backend (e.g., xsel).
 #######################################
 function __ps_resolve_backend() {
   local -n _backend="$1"
@@ -768,8 +774,9 @@ function past() {
   __ps_debug "$debug_mode" 'options-parsed' \
     "mime=${mime_type:-<none>}"
 
-  # Phase 3: classify the requested MIME so the read step
-  # knows whether to apply the trailing-newline workaround.
+  # Phase 3: classify the requested MIME
+  # so the read step knows
+  # whether to apply the trailing-newline workaround.
   __ps_classify_mime is_binary_mime "$mime_type"
 
   __ps_debug "$debug_mode" 'mime-classified' \
@@ -798,10 +805,10 @@ function past() {
 # endregion
 
 # region Execution guard
-#
+
 # When the file is executed directly (not sourced),
 # run the main function and propagate its exit code.
-# If sourced, do nothing (just expose past() as a function).
+# If sourced, do nothing (expose past() as a function).
 if [[ ${BASH_SOURCE[0]} == "$0" ]]; then
   past "$@"
   exit "$?"

@@ -23,17 +23,18 @@ jobs:
 
     steps:
       - name: ⚙️ Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7.0.0
         with:
           fetch-depth: 1
           # We do not push back from this job,
           # so credentials are not needed.
-          # checkout@v6 still stores the token under $RUNNER_TEMP
-          # by default, but turning persist-credentials off
-          # eliminates the file entirely
+          # checkout@v7 still stores the token under $RUNNER_TEMP by default,
+          # but turning persist-credentials off eliminates the file entirely
           # and is one less thing to worry about
           # if the workspace is later archived or cached.
           persist-credentials: false
+
+# region Install tooling
 
       # Pin tool versions:
       # apt bash and bats are recent enough on ubuntu-latest,
@@ -72,6 +73,10 @@ jobs:
           bats_v="$(bats --version)"
           echo "::notice title=Tool versions::shellcheck ${shellcheck_v}, shfmt ${shfmt_v}, ${bats_v}"
 
+# endregion
+
+# region Lint & style checks
+
       # The Makefile encapsulates the exact lint commands used locally,
       # so CI matches `make check` byte-for-byte.
       - name: 🔍 shellcheck
@@ -95,6 +100,10 @@ jobs:
           set -o errexit -o nounset -o pipefail
           bats tests/integration/test_code_style.bats
           echo '::notice title=Style gate::Headers + shfmt-idempotency checks passed'
+
+# endregion
+
+# region Job summary
 
       - name: 📊 Summary
         if: ${{ always() }}
@@ -164,3 +173,5 @@ jobs:
           }
 
           main "$@"
+
+# endregion

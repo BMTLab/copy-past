@@ -1,8 +1,8 @@
 # .github/dependabot.yml
 #
 # Keeps third-party action versions pinned and up-to-date.
-# We pin actions to exact versions in workflow files
-# (e.g. actions/checkout@v6, not @v5),
+# We pin actions to an exact major.minor.patch tag in workflow files
+# (e.g. actions/checkout@v7.0.0, not a floating @v7 or @latest),
 # so Dependabot opens a PR whenever a new version is released
 # and we can review the changelog before adopting it.
 
@@ -18,8 +18,9 @@ updates:
       include: scope
     target-branch: dev
     open-pull-requests-limit: 5
-    reviewers:
-      - BMTLab
+    # Reviewer assignment is handled by .github/CODEOWNERS (`* @BMTLab`):
+    # the dependabot `reviewers:` key was retired by GitHub on 2025-08-08
+    # and is now ignored, so we rely on code owners instead.
     labels:
       - dependencies
       - github-actions

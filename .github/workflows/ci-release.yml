@@ -41,7 +41,7 @@ jobs:
 
     steps:
       - name: ⚙️ Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7.0.0
         with:
           fetch-depth: 0
           fetch-tags: true
@@ -51,6 +51,8 @@ jobs:
           # softprops/action-gh-release@v3 uses its own `token` input
           # (defaulted to github.token) to call the Releases API.
           persist-credentials: false
+
+# region Verify version headers
 
       # Sanity check:
       # the version in copy.sh / past.sh must match the tag.
@@ -167,9 +169,13 @@ jobs:
 
           main "$@"
 
+# endregion
+
+# region Build release tarball
+
       # `git archive` honours `export-ignore` attributes,
-      # so the resulting tarball contains
-      # only the files that downstream users actually need
+      # so the resulting tarball contains only the files
+      # that downstream users actually need
       # (scripts, README, LICENSE, Makefile).
       # Everything dev-only is filtered out automatically.
       - name: 📦 Build release tarball
@@ -279,14 +285,19 @@ jobs:
 
           main "$@"
 
+# endregion
+
+# region Publish GitHub Release
+
       - name: 🛳️ Create GitHub Release
         id: create-release
-        uses: softprops/action-gh-release@v3
+        uses: softprops/action-gh-release@v3.0.1
         with:
           tag_name: ${{ inputs.version }}
           name: ${{ inputs.version }}
-          # We let GitHub auto-generate release notes from the
-          # commit history between the previous tag and this one.
+          # We let GitHub auto-generate release notes
+          # from the commit history
+          # between the previous tag and this one.
           # CHANGELOG.md (when maintained by hand) can be linked
           # from the release body; we do not duplicate its content
           # in the release UI to avoid drift.
@@ -297,8 +308,9 @@ jobs:
           # appears next to (and below) the file it verifies.
           preserve_order: true
           # Mark the freshly published version as the latest release
-          # in the GitHub UI; pre-release dispatches go through a
-          # different workflow and never hit this step.
+          # in the GitHub UI;
+          # pre-release dispatches go through a different workflow
+          # and never hit this step.
           make_latest: 'true'
           files: |
             ${{ env.ARCHIVE_NAME }}.tar.gz
@@ -313,18 +325,23 @@ jobs:
         run: |
           echo "::notice title=Release::${TAG} published at ${RELEASE_URL}"
 
+# endregion
+
+# region SLSA build provenance
+
       # Build provenance creates a sigstore-signed SLSA attestation
       # tied to the workflow that produced the tarball.
       # Consumers can verify authenticity via the GitHub CLI:
       #   gh attestation verify copy-past-vX.Y.Z.tar.gz \
       #     --repo BMTLab/copy-past
       #
-      # We pass `subject-checksums` so the attestation references
-      # the .sha256 file we already produced;
+      # We pass `subject-checksums`
+      # so the attestation references the .sha256 file
+      # we already produced;
       # the action then attests every file listed there.
       - name: 🔏 Generate SLSA build provenance
         id: provenance
-        uses: actions/attest-build-provenance@v4
+        uses: actions/attest-build-provenance@v4.1.1
         with:
           subject-checksums: ${{ env.ARCHIVE_NAME }}.tar.gz.sha256
 
@@ -334,6 +351,10 @@ jobs:
           ATTESTATION_URL: ${{ steps.provenance.outputs.attestation-url }}
         run: |
           echo "::notice title=SLSA::Build provenance attestation: ${ATTESTATION_URL}"
+
+# endregion
+
+# region Job summary
 
       - name: 📊 Summary
         if: ${{ always() }}
@@ -388,8 +409,8 @@ jobs:
 
           #######################################
           # Append the GitHub Release page link to the summary,
-          # using the `url` output published by
-          # softprops/action-gh-release@v3.
+          # using the `url` output
+          # published by softprops/action-gh-release@v3.
           # The block is skipped when the release step did not run
           # (e.g. when the workflow was triggered manually
           # for a dry-run).
@@ -410,8 +431,8 @@ jobs:
 
           #######################################
           # Append the SLSA attestation block to the summary,
-          # using the `attestation-url` output published by
-          # actions/attest-build-provenance@v4.
+          # using the `attestation-url` output
+          # published by actions/attest-build-provenance@v4.
           # Includes the verification command for downstream users
           # so the link is actionable, not just decorative.
           #
@@ -471,3 +492,5 @@ jobs:
           }
 
           main "$@"
+
+# endregion

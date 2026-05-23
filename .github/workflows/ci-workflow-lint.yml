@@ -2,8 +2,7 @@
 #
 # Static analysis for our own GitHub Actions workflow files.
 #
-# Runs in parallel with ci-lint.yml (shell-script lint)
-# and ci-test.yml (bats),
+# Runs in parallel with ci-lint.yml (shell-script lint) and ci-test.yml (bats),
 # because workflow YAML and shell scripts share no dependencies
 # and there is no reason to gate one behind the other.
 #
@@ -29,7 +28,7 @@ jobs:
 
     steps:
       - name: ⚙️ Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7.0.0
         with:
           fetch-depth: 1
           # The job is read-only,
@@ -46,13 +45,10 @@ jobs:
         id: actionlint
         uses: reviewdog/action-actionlint@v1.72.0
         env:
-          # reviewdog uses this token to post inline review
-          # comments on pull requests.
-          # GitHub Actions exposes the workflow token as
-          # `secrets.GITHUB_TOKEN`,
+          # reviewdog uses this token to post inline review comments on pull requests.
+          # GitHub Actions exposes the workflow token as `secrets.GITHUB_TOKEN`,
           # which has the right scopes by default
-          # because the job already declares
-          # `pull-requests: write`.
+          # because the job already declares `pull-requests: write`.
           REVIEWDOG_GITHUB_API_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           # `github-pr-review` posts inline comments on PRs;
@@ -68,8 +64,8 @@ jobs:
       # Surface the actionlint result as a notice on success
       # so the run summary clearly states 'no findings'.
       # Failures are already annotated inline by reviewdog
-      # on the offending workflow line, so we do not re-emit
-      # an `::error` here.
+      # on the offending workflow line,
+      # so we do not re-emit an `::error` here.
       - name: ✅ Confirm clean
         if: ${{ success() }}
         run: |

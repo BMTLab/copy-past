@@ -54,7 +54,7 @@ jobs:
 
     steps:
       - name: ⚙️ Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7.0.0
         with:
           fetch-depth: 1
           # The job only reads the workspace,
@@ -64,7 +64,7 @@ jobs:
           persist-credentials: false
 
 # region Tool installation per platform
-      #
+
       # We install bats-core from git (pinned tag), not from apt.
       #
       # Reason:
@@ -176,14 +176,17 @@ jobs:
           xxd --version 2>&1 | head -n1 || true
           echo '::endgroup::'
 
-          # Aggregate the most relevant versions into a single
-          # annotation so reviewers can spot bash/bats drift
-          # across the matrix without expanding individual log groups.
+          # Aggregate the most relevant versions into a single annotation
+          # so reviewers can spot bash/bats drift across the matrix
+          # without expanding individual log groups.
           bash_version="$(bash --version | head -n1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n1)"
           bats_version="$(bats --version | awk '{print $NF}')"
           echo "::notice title=Environment (${{ matrix.os }})::bash ${bash_version}, bats ${bats_version}"
 
+# endregion
+
 # region Primary gate: hermetic bats suite
+
       - name: 🧪 Run bats (hermetic, fake backend)
         run: |
           set -o errexit -o nounset -o pipefail
@@ -240,8 +243,10 @@ jobs:
             echo "::warning title=bats::No JUnit XML produced; verify the suite actually ran"
           fi
 
+# endregion
+
 # region Optional: real-backend smoke test
-      #
+
       # Linux: spin up a virtual X11 display via xvfb-run,
       # run a tiny round-trip through real xclip,
       # and assert byte fidelity.
@@ -304,17 +309,21 @@ jobs:
       # and Homebrew xclip on macOS is non-functional without XQuartz.
       # We skip the real-backend smoke there;
       # the hermetic suite still validates all logic paths.
-      # Surfaced as a `::warning` (not `::notice`) so the run summary
-      # makes the missing coverage visible rather than burying it.
+      # Surfaced as a `::warning` (not `::notice`)
+      # so the run summary makes the missing coverage visible
+      # rather than burying it.
       - name: 🌀 Real-backend smoke (macOS)
         if: ${{ runner.os == 'macOS' }}
         run: echo '::warning title=Real-backend smoke::Skipped on macOS (no clipboard tool installed); hermetic suite is the primary gate'
 
+# endregion
+
 # region Artifacts & summary
+
       - name: 📤 Upload bats results
         if: ${{ always() }}
         id: upload-results
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v7.0.1
         with:
           name: bats-results-${{ matrix.os }}
           path: ${{ env.BATS_RESULTS_DIR }}/**
@@ -325,15 +334,17 @@ jobs:
           # with "an artifact with this name already exists".
           overwrite: true
           # JUnit XML compresses well; the default level is fine,
-          # but we set it explicitly so future tooling changes
-          # do not silently regress to a slower default.
+          # but we set it explicitly
+          # so future tooling changes do not silently regress
+          # to a slower default.
           compression-level: 6
 
-      # Surface the artifact URL as a notice so PR reviewers
-      # can jump straight to the JUnit XML without expanding
-      # the run-summary block.
-      # Skipped on workflow re-runs where the upload step
-      # was not triggered (e.g. cancelled jobs).
+      # Surface the artifact URL as a notice
+      # so PR reviewers can jump straight to the JUnit XML
+      # without expanding the run-summary block.
+      # Skipped on workflow re-runs
+      # where the upload step was not triggered
+      # (e.g. cancelled jobs).
       - name: 🔗 Announce artifact
         if: ${{ always() && steps.upload-results.outputs.artifact-url != '' }}
         env:
@@ -463,3 +474,5 @@ jobs:
           }
 
           main "$@"
+
+# endregion
