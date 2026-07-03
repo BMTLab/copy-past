@@ -87,5 +87,7 @@ jobs:
           {
             echo '## 🪝 Workflow Lint'
             echo
-            printf '| actionlint | %s |\n' "$mark"
+            echo '| Check      | Status |'
+            echo '|------------|--------|'
+            printf '| %-10s | %s |\n' 'actionlint' "$mark"
           } >> "$GITHUB_STEP_SUMMARY"
