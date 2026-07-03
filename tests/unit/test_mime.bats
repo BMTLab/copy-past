@@ -338,12 +338,15 @@ setup() {
 
 @test "__cp_resolve_backend rejects xsel + non-text MIME (rc=5)" {
   # Arrange:
-  # disable wl/xclip stubs so we fall back to xsel,
-  # then enable a working xsel fake.
-  __cp_disable_wl
+  # force xsel explicitly via COPY_PAST_BACKEND,
+  # so the assertion stays deterministic regardless of the host.
+  # Relying on auto-detection to fall through to xsel was fragile:
+  # CI installs a real xclip, which __cp_detect_backend would pick
+  # before ever reaching xsel.
+  # __cp_apply_mime rejects the binary MIME before xsel is executed,
+  # so the fake only needs to be discoverable on PATH, not functional.
   __cp_enable_xsel_fake
-  rm -f "${FAKE_BIN}/xclip"
-  unset WAYLAND_DISPLAY
+  export COPY_PAST_BACKEND=xsel
   local -a backend=()
   local -i rc=0
 
