@@ -159,13 +159,26 @@ jobs:
         run: |
           set -o errexit -o nounset -o pipefail
 
+          # macOS still ships Bash 3.2 (the last GPLv2 release),
+          # which lacks the `local -n` namerefs
+          # and other Bash 4.3+ features that copy.sh and past.sh rely on.
+          # Install a current Bash from Homebrew,
+          # so bats, the `bash -c` runners,
+          # and the sourced scripts all execute under Bash 4.3+
+          # instead of /bin/bash 3.2.
+          #
           # `xxd` ships with macOS by default;
           # bats-core via Homebrew is reliably current (>= 1.10).
-          echo '::group::brew install bats-core'
-          brew install bats-core
+          echo '::group::brew install bash bats-core'
+          brew install bash bats-core
           echo '::endgroup::'
 
-          echo "::notice title=Tool setup (macOS)::bats $(bats --version | awk '{print $NF}') from Homebrew"
+          # GITHUB_PATH entries are prepended to PATH for later steps,
+          # so `bash` resolves to the Homebrew interpreter,
+          # not the system 3.2.
+          echo "$(brew --prefix)/bin" >> "$GITHUB_PATH"
+
+          echo "::notice title=Tool setup (macOS)::bats $(bats --version | awk '{print $NF}') and modern Bash installed from Homebrew"
 
       - name: ℹ️ Environment
         run: |
