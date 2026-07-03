@@ -100,16 +100,20 @@ jobs:
 
           #######################################
           # Install runtime tooling via apt
-          # (xxd, xclip, xvfb, bsdutils).
+          # (xxd, xclip, xvfb, bsdutils, jq).
+          # jq is optional at runtime (it enables JSON auto-detection);
+          # installing it explicitly keeps that path covered
+          # regardless of what the runner image preinstalls.
           #######################################
           function install_runtime_tools() {
-            echo '::group::apt-get install (xxd, xclip, xvfb, bsdutils)'
+            echo '::group::apt-get install (xxd, xclip, xvfb, bsdutils, jq)'
             sudo apt-get update -qq
             sudo apt-get install -y --no-install-recommends \
               xxd \
               xclip \
               xvfb \
-              bsdutils
+              bsdutils \
+              jq
             echo '::endgroup::'
           }
 
@@ -169,8 +173,8 @@ jobs:
           #
           # `xxd` ships with macOS by default;
           # bats-core via Homebrew is reliably current (>= 1.10).
-          echo '::group::brew install bash bats-core'
-          brew install bash bats-core
+          echo '::group::brew install bash bats-core jq'
+          brew install bash bats-core jq
           echo '::endgroup::'
 
           # GITHUB_PATH entries are prepended to PATH for later steps,
@@ -248,7 +252,7 @@ jobs:
             fi
 
             if (( skipped > 0 )); then
-              echo "::warning title=bats::${skipped} of ${total} tests were skipped (likely missing optional tooling like jq)"
+              echo "::notice title=bats::${skipped} of ${total} tests skipped (shfmt/shellcheck style checks are covered by the Lint job)"
             fi
 
             echo "::notice title=bats (${{ matrix.os }})::${total} tests passed (${skipped} skipped)"
