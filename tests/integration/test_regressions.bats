@@ -16,6 +16,12 @@
 #        used to be hidden by bash's default behaviour
 #        of returning only the last command's exit code.
 #        The pipeline now runs under `set -o pipefail`.
+#     3. copy.sh: the process that wl-copy or xclip leaves behind
+#        to serve the clipboard inherited the output of copy,
+#        so `$(printf x | copy)` waited
+#        until another program took the clipboard.
+#        The backend now writes to output of its own,
+#        and copy relays its error messages to stderr.
 #
 #   ANSI grammar coverage and parser-level robustness checks
 #   live in the unit suite
@@ -90,6 +96,46 @@ setup() {
 
   # Assert
   [ "$status" -eq "$COPY_ERR_BACKEND_FAILED" ]
+}
+
+# endregion
+
+
+# region Fix 3: copy.sh keeps the backend off the output of its caller
+
+@test "copy inside \$(...) returns while the backend still serves the clipboard" {
+  # Arrange:
+  # like the real wl-copy, the fake leaves a process behind
+  # that keeps the stdout and stderr it inherited, here for 10 s.
+  __cp_install_forking_wl_copy 10
+
+  # Act:
+  # $(...) waits until every process holding its pipe is gone.
+  run --separate-stderr __cp_run '
+    started=$SECONDS
+    captured="$(printf "%s" "data" | copy)"
+    printf "%s" "$((SECONDS - started))"
+  '
+
+  # Assert:
+  # the capture ends long before the process left behind does.
+  [ "$status" -eq 0 ]
+  [ "$output" -lt 5 ]
+  [ "$(__cp_clipboard_dump)" = 'data' ]
+}
+
+@test "copy still shows the error message of a failing backend" {
+  # Arrange
+  __cp_install_failing_wl_copy 1 'wl-copy: failed to connect to a Wayland server'
+
+  # Act
+  run --separate-stderr __cp_run 'printf "%s" "data" | copy'
+
+  # Assert:
+  # the message of the backend itself, besides the one of copy.
+  [ "$status" -eq "$COPY_ERR_BACKEND_FAILED" ]
+  [[ "$stderr" == *'wl-copy: failed to connect to a Wayland server'* ]]
+  [[ "$stderr" == *'Clipboard backend failed'* ]]
 }
 
 # endregion

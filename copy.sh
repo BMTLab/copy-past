@@ -654,7 +654,7 @@ function __cp_emit() {
 
   # Short-circuit: no transformations at all.
   if ((raw_mode && !trim_mode)); then
-    "$@"
+    __cp_run_backend "$@"
     return "$?"
   fi
 
@@ -662,11 +662,11 @@ function __cp_emit() {
   # The leftmost stage is stdin into our pipeline,
   # the rightmost stage is the backend.
   if ((raw_mode)); then
-    __cp_trim_whitespace | "$@"
+    __cp_trim_whitespace | __cp_run_backend "$@"
   elif ((trim_mode)); then
-    __cp_strip_ansi | __cp_trim_whitespace | "$@"
+    __cp_strip_ansi | __cp_trim_whitespace | __cp_run_backend "$@"
   else
-    __cp_strip_ansi | "$@"
+    __cp_strip_ansi | __cp_run_backend "$@"
   fi
 }
 
@@ -1117,6 +1117,47 @@ function __cp_resolve_backend() {
   fi
 }
 
+#######################################
+# Run the clipboard backend with output of its own.
+#
+# wl-copy and xclip leave a process behind
+# that serves the clipboard until another program takes it,
+# and that process inherits the stdout and stderr of copy.
+# Were they the caller's, a capture such as `$(copy)`,
+# a pipe, or the shell tool of an AI agent would wait
+# for as long as the clipboard holds the data.
+# So the backend writes to /dev/null and to a file,
+# and its error messages reach stderr from that file
+# once the backend returns.
+#
+# Arguments:
+#   $@: backend argv; the payload comes on stdin.
+#
+# Outputs:
+#   The error messages of the backend, to stderr.
+#
+# Returns:
+#   The exit status of the backend.
+#######################################
+function __cp_run_backend() {
+  local errors_path
+  local -i backend_rc=0
+
+  # Without a file for the errors, losing their text beats a hang.
+  errors_path="$(mktemp -t copy-errors.XXXXXX)" || errors_path='/dev/null'
+
+  "$@" >/dev/null 2>"$errors_path" || backend_rc=$?
+
+  if [[ $errors_path != '/dev/null' ]]; then
+    if [[ -s $errors_path ]]; then
+      cat -- "$errors_path" >&2
+    fi
+    rm -f -- "$errors_path"
+  fi
+
+  return "$backend_rc"
+}
+
 # endregion
 
 # region Input buffering
@@ -1196,7 +1237,7 @@ function __cp_emit_buffer_raw() {
   shift
 
   local -i emit_rc=0
-  "$@" <"$buffer_path" || emit_rc=$?
+  __cp_run_backend "$@" <"$buffer_path" || emit_rc=$?
   rm -f -- "$buffer_path"
 
   if ((emit_rc != 0)); then

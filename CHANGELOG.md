@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- `copy` no longer keeps its caller waiting.
+  wl-copy and xclip leave a process behind
+  that serves the clipboard until another program takes it,
+  and that process held the output of `copy`,
+  so `$(printf x | copy)`, a pipe into another command,
+  or the shell tool of an AI agent waited
+  for as long as the clipboard held the data.
+  The backend now writes to output of its own,
+  and its error messages still reach stderr.
+
 ## [2.0.0] - 2026-07-03
 
 ### Added

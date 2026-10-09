@@ -180,13 +180,37 @@ __cp_disable_wl() {
 #
 # Arguments:
 #   1: exit code the fake should return (1..255).
+#   2: message the fake prints to stderr first (optional, no quotes).
 #######################################
 __cp_install_failing_wl_copy() {
   local -r exit_code="$1"
+  local -r message="${2-}"
   cat > "${FAKE_BIN}/wl-copy" << EOF
 #!/usr/bin/env bash
 cat > /dev/null
+${message:+printf '%s\\n' '${message}' >&2}
 exit ${exit_code}
+EOF
+  chmod +x "${FAKE_BIN}/wl-copy"
+}
+
+#######################################
+# Replace the wl-copy fake with one that, like the real wl-copy,
+# leaves a process behind that keeps the stdout and stderr it inherited,
+# as the server of the clipboard does until another program takes it.
+# The process closes fd 3, the channel of bats,
+# which would otherwise wait for it at the end of the test.
+#
+# Arguments:
+#   1: seconds the process left behind lives.
+#######################################
+__cp_install_forking_wl_copy() {
+  local -r seconds="$1"
+  cat > "${FAKE_BIN}/wl-copy" << EOF
+#!/usr/bin/env bash
+cat > "${FAKE_CLIPBOARD_FILE}"
+sleep ${seconds} 3>&- &
+exit 0
 EOF
   chmod +x "${FAKE_BIN}/wl-copy"
 }
