@@ -2,8 +2,8 @@
 
 # Name: copy.sh
 # Author: Nikita Neverov (BMTLab)
-# Version: 2.0.0
-# Date: 2026-07-03
+# Version: 2.0.1
+# Date: 2026-10-09
 # License: MIT
 #
 # Description:
