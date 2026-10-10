@@ -258,7 +258,7 @@ function __cp_error() {
 #######################################
 function __cp_debug() {
   local -ir debug_mode=$1
-  if ((!debug_mode)); then
+  if ((! debug_mode)); then
     return 0
   fi
 
@@ -653,7 +653,7 @@ function __cp_emit() {
   shift 2
 
   # Short-circuit: no transformations at all.
-  if ((raw_mode && !trim_mode)); then
+  if ((raw_mode && ! trim_mode)); then
     __cp_run_backend "$@"
     return "$?"
   fi
@@ -1335,7 +1335,7 @@ function __cp_capture_prelude() {
   local -ir append_mode=$2
 
   _prelude_path=''
-  if ((!append_mode)); then
+  if ((! append_mode)); then
     return 0
   fi
 

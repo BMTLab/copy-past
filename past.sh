@@ -191,7 +191,7 @@ function __ps_error() {
 #######################################
 function __ps_debug() {
   local -ir debug_mode=$1
-  if ((!debug_mode)); then
+  if ((! debug_mode)); then
     return 0
   fi
 

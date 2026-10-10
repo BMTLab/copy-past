@@ -38,11 +38,19 @@ jobs:
 
       # Pin tool versions:
       # apt bash and bats are recent enough on ubuntu-latest,
-      # and shellcheck/shfmt are also packaged.
-      # We install everything via apt,
-      # so we avoid third-party actions
+      # and shellcheck is packaged too, so those come from apt.
+      # shfmt does not: the one of apt is older
+      # and writes some lines otherwise than the maintainer's,
+      # so CI takes the release binary of the version the maintainer runs,
+      # checked against the digest of that release asset.
+      # Neither way needs a third-party action
       # that could be compromised or rate-limited.
       - name: 🔧 Install lint tooling
+        env:
+          # To move it: change the version, then take the new digest
+          # from `gh release view vX.Y.Z --repo mvdan/sh --json assets`.
+          SHFMT_VERSION: '3.14.1'
+          SHFMT_SHA256: '76e77641faa025814b77f153b29796b8e6fa2fca03e0c76a691608b86c7ea7bf'
         run: |
           set -o errexit -o nounset -o pipefail
 
@@ -50,11 +58,21 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
             shellcheck \
-            shfmt \
             bats
           echo '::endgroup::'
 
-          echo '::notice title=Lint setup::Installed shellcheck, shfmt, bats'
+          echo '::group::shfmt'
+          tools="${RUNNER_TEMP}/tools"
+          mkdir -p "${tools}"
+          curl --fail --silent --show-error --location --retry 3 \
+            --output "${tools}/shfmt" \
+            "https://github.com/mvdan/sh/releases/download/v${SHFMT_VERSION}/shfmt_v${SHFMT_VERSION}_linux_amd64"
+          echo "${SHFMT_SHA256}  ${tools}/shfmt" | sha256sum --check --strict
+          chmod 0755 "${tools}/shfmt"
+          echo "${tools}" >>"${GITHUB_PATH}"
+          echo '::endgroup::'
+
+          echo "::notice title=Lint setup::Installed shellcheck and bats from apt, shfmt v${SHFMT_VERSION} by digest"
 
       - name: ℹ️ Tool versions
         run: |
