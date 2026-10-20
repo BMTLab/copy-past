@@ -279,9 +279,24 @@ bats_test_function \
 bats_test_function \
   --description "__cp_sniff_mime keeps text/plain when text comes before a brace" \
   -- json_detection_reads_the_payload 'value: {"a":1}' 'text/plain'
-bats_test_function \
-  --description "__cp_sniff_mime keeps text/plain for JSON after a NUL byte" \
-  -- json_detection_reads_the_payload '\0{"a":1}' 'text/plain'
+
+@test "__cp_sniff_mime keeps text/plain when a NUL byte comes first, whatever jq says" {
+  local -r payload_path="${BATS_TEST_TMPDIR}/nul-first.bin"
+  local mime_type=''
+
+  # Arrange:
+  # jq 1.6 parses JSON after a NUL byte, and jq 1.7 does not;
+  # a fake jq that takes anything stands for the lenient one.
+  printf '#!/usr/bin/env bash\nexit 0\n' >"${FAKE_BIN}/jq"
+  chmod +x "${FAKE_BIN}/jq"
+  printf '\0{"a":1}' >"${payload_path}"
+
+  # Act
+  __cp_sniff_mime mime_type "${payload_path}"
+
+  # Assert
+  [[ "${mime_type}" == 'text/plain' ]]
+}
 
 @test "__cp_sniff_mime finds JSON after any run of leading whitespace" {
   local -r payload_path="${BATS_TEST_TMPDIR}/padded.json"

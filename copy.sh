@@ -370,28 +370,40 @@ function __cp_apply_mime() {
 # region MIME sniffing
 
 #######################################
-# Find the first character of a file that is not whitespace.
+# Tell whether a file is shaped like JSON:
+# the first byte that is not whitespace is { or [.
 #
 # bash reads the file a block at a time,
 # so no process has to read the whole payload.
+# read -d '' stops at a NUL byte, which is no whitespace,
+# so a NUL before any other visible byte answers no, as binary data should,
+# even where an old jq would parse what follows it.
 #
 # Arguments:
-#   1: The name of the variable that takes the character;
-#      it stays empty when the file holds only whitespace.
-#   2: The path of the file.
+#   1: The path of the file.
+#
+# Returns:
+#   0 when the file is shaped like JSON, 1 otherwise.
 #######################################
-function __cp_find_first_visible_character() {
-  local -n _character_ref=$1
-  local -r file_path="$2"
-  local block=''
+function __cp_is_json_shaped() {
+  local -r file_path="$1"
+  local block visible_text
+  local -i read_status
 
-  _character_ref=''
-  while IFS= read -r -d '' -n 4096 block || [[ -n "${block}" ]]; do
-    block="${block#"${block%%[![:space:]]*}"}"
-    if [[ -n "${block}" ]]; then
-      _character_ref="${block:0:1}"
+  while true; do
+    block=''
+    read_status=0
+    IFS= read -r -d '' -n 4096 block || read_status=$?
+    visible_text="${block#"${block%%[![:space:]]*}"}"
+    if [[ -n "${visible_text}" ]]; then
+      [[ "${visible_text:0:1}" == '{' || "${visible_text:0:1}" == '[' ]]
 
-      return 0
+      return
+    fi
+    # read stops early at a NUL byte, and at the end of the file:
+    # both end the search with no.
+    if ((read_status != 0 || ${#block} < 4096)); then
+      return 1
     fi
   done <"${file_path}"
 }
@@ -420,7 +432,7 @@ function __cp_find_first_visible_character() {
 function __cp_sniff_mime() {
   local -n _mime_type_ref=$1
   local -r payload_path="$2"
-  local magic_hex first_character
+  local magic_hex
 
   # od prints the first 16 bytes as hex, enough for every signature;
   # WebP is a RIFF container with WEBP at byte 8.
@@ -440,18 +452,14 @@ function __cp_sniff_mime() {
   fi
 
   # jq reads the whole payload, so the cheap check comes first:
-  # jq runs only when the first visible character is { or [.
-  __cp_find_first_visible_character first_character "${payload_path}"
-  case "${first_character}" in
-    '{' | '[')
-      if __cp_has_command jq \
-        && command jq -e '.' <"${payload_path}" >/dev/null 2>&1; then
-        _mime_type_ref='application/json'
+  # jq runs only when the payload is shaped like JSON.
+  if __cp_is_json_shaped "${payload_path}" \
+    && __cp_has_command jq \
+    && command jq -e '.' <"${payload_path}" >/dev/null 2>&1; then
+    _mime_type_ref='application/json'
 
-        return 0
-      fi
-      ;;
-  esac
+    return 0
+  fi
 
   _mime_type_ref='text/plain'
 }
