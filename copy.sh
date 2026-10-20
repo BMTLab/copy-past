@@ -32,7 +32,7 @@
 #   a caller of copy never waits for that process.
 #   --debug prints each step to stderr, in the format of __cp_debug.
 #
-# Version: 2.0.1
+# Version: 3.0.0
 
 # region Exit codes
 

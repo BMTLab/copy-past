@@ -5,7 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [3.0.0] - 2026-10-20
+
+copy and past now follow the shell style of BMTLab,
+and the move found five bugs, which this release fixes.
+Before you upgrade, note three changes:
+copy takes its arguments over stdin,
+each message starts with `copy:` or `past:`,
+and bash 4.4 or newer is needed.
 
 ### Added
 
@@ -18,19 +25,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- Each message starts with the name of the tool, `copy:` or `past:`,
-  no longer with `ERROR:`, and a second line says what to do next,
-  such as `copy: unknown option: --bogus`, then `copy: see: copy --help`.
-- `--help` names `COPY_PAST_BACKEND` under Settings,
-  no longer under Environment.
-- copy and past need bash 4.4 or newer, no longer 4.3:
-  run as programs, they turn on `shopt -s inherit_errexit`.
 - The arguments of copy win over stdin: copy reads stdin
   only when no text comes as arguments, as wl-copy does.
   stdin came first whenever it was no terminal,
   so in a script, in cron or in the shell of an AI agent,
   `copy 'text'` hung while stdin stayed open,
   or wrote an empty clipboard from /dev/null.
+- Each message starts with the name of the tool, `copy:` or `past:`,
+  no longer with `ERROR:`, and a second line says what to do next,
+  such as `copy: unknown option: --bogus`, then `copy: see: copy --help`.
+- copy and past need bash 4.4 or newer, no longer 4.3:
+  run as programs, they turn on `shopt -s inherit_errexit`.
+- `--help` names `COPY_PAST_BACKEND` under Settings,
+  no longer under Environment.
 
 ### Fixed
 
@@ -154,6 +161,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `copy` and `past` shell helpers
   with Wayland (`wl-clipboard`) and X11 (`xclip`/`xsel`) support.
 
+[3.0.0]: https://github.com/BMTLab/copy-past/releases/tag/v3.0.0
 [2.0.1]: https://github.com/BMTLab/copy-past/releases/tag/v2.0.1
 [2.0.0]: https://github.com/BMTLab/copy-past/releases/tag/v2.0.0
 [1.0.0]: https://github.com/BMTLab/copy-past/releases/tag/v1.0.0

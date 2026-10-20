@@ -23,7 +23,7 @@
 #   A binary MIME type, such as image/png, skips this step,
 #   since a bash variable cannot hold NUL bytes.
 #
-# Version: 2.0.1
+# Version: 3.0.0
 
 # region Exit codes
 
