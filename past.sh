@@ -7,7 +7,8 @@
 # Effects: none: past only reads the CLIPBOARD selection;
 #   it needs a Wayland or X11 session.
 # Dependencies: wl-paste (wl-clipboard), xclip or xsel.
-# Settings: COPY_PAST_BACKEND, the backend to use:
+# Settings: COPY_PAST_BACKEND, the backend to use, as copy reads it,
+#   so both halves of a round trip agree:
 #   wl-clipboard, xclip or xsel (default: the first one found).
 # Exit codes: 0 success, 1 PAST_ERR_GENERAL, 2 PAST_ERR_USAGE,
 #   3 PAST_ERR_NO_BACKEND, 4 PAST_ERR_BACKEND_FAILED,
@@ -348,10 +349,13 @@ function __ps_read_wl_paste() {
   local captured status_text
   local -i backend_status=0
 
+  # The status of wl-paste, not the one of printf, follows the x.
   captured="$(
     command "$@" || backend_status=$?
     printf 'x%d' "${backend_status}"
   )"
+
+  # After the last x comes the status; before it, the text.
   status_text="${captured##*x}"
   captured="${captured%x*}"
 
@@ -488,6 +492,8 @@ function __ps_parse_image_flag() {
 #######################################
 function __ps_parse_arguments() {
   local -n _parsed_options_ref=$1
+  # The helpers get the name that the caller gave, never this nameref:
+  # a helper whose nameref had the same name would point at itself.
   local -r options_name="$1"
   local -i used_count=0
   shift
@@ -661,6 +667,7 @@ function past() {
   __ps_debug "${options['is_debug']}" 'mime-classified' \
     "is-binary=${is_binary_mime}"
 
+  # The backend comes with the MIME type of the user, if there is one.
   __ps_resolve_backend backend_command "${options['mime_type']}" || return
   __ps_debug "${options['is_debug']}" 'backend-resolved' \
     "backend=${backend_command[0]}"

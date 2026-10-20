@@ -1,6 +1,9 @@
 #!/usr/bin/env bats
 
 # Tests what each clipboard backend can do, as the README matrix promises.
+
+# This file is the matrix in code:
+# when a backend gains or loses a feature, the matrix and its test change together.
 #
 #   | Feature               | wl-clipboard | xclip | xsel |
 #   | --------------------- | :----------: | :---: | :--: |

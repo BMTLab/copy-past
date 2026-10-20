@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 # Check the events of the debug log that copy and past print with --debug.
-#
+
 # A line of the log reads: [copy debug] event=NAME key=value key='a value',
 # or [past debug] for past. The checks only need the fields they name,
 # so a new field on a line breaks no test.

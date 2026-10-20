@@ -18,8 +18,10 @@
 #
 # How it works:
 #   The payload comes from stdin when stdin is no terminal,
-#   and from the arguments, joined by spaces, otherwise.
-#   ANSI escape sequences go, unless --raw keeps them.
+#   and from the arguments, joined by spaces, otherwise;
+#   copy adds no newline of its own.
+#   ANSI escape sequences go, so a paste into a GUI app is clean text,
+#   unless --raw keeps them.
 #   The first bytes choose the MIME type:
 #   the magic bytes of PNG, JPEG, GIF, BMP and WebP,
 #   or JSON that jq parses; anything else is text/plain.
@@ -28,6 +30,7 @@
 #   wl-copy and xclip leave a process behind to serve the clipboard,
 #   so the backend gets output of its own:
 #   a caller of copy never waits for that process.
+#   --debug prints each step to stderr, in the format of __cp_debug.
 #
 # Version: 2.0.1
 
@@ -190,7 +193,8 @@ function __cp_internal_error() {
 #
 # A line reads: [copy debug] event=NAME key=value key='a value'.
 # Tests and people match single events in it,
-# so the format is a contract: a value with whitespace gets single quotes.
+# so the format is a contract: a value with whitespace gets single quotes,
+# and a reader that splits the line at spaces still finds each field.
 # Without --debug, copy prints nothing to stderr,
 # so it never disturbs a pipeline.
 #
@@ -245,8 +249,9 @@ function __cp_has_command() {
 #######################################
 # Find the clipboard backend to write with.
 #
-# COPY_PAST_BACKEND names the backend, and then that backend must exist;
-# an unknown name is a usage error, not a missing backend.
+# COPY_PAST_BACKEND names the backend, and then that backend must exist.
+# An unknown name is a usage error, not a missing backend,
+# since the user asked for one backend by its name.
 # Otherwise a Wayland session takes wl-copy first,
 # since xclip would go through XWayland; then come xclip and xsel.
 # The command holds no MIME type yet: __cp_apply_mime adds it.
@@ -390,14 +395,19 @@ function __cp_find_first_visible_character() {
 #######################################
 # Guess the MIME type of a payload from its first bytes.
 #
-# The magic bytes of PNG, JPEG, GIF, BMP and WebP come first:
-# plain text never starts with them, so they are never wrong.
+# The magic bytes of an image come first:
+#   89 50 4E 47           PNG, as \x89 and PNG
+#   FF D8 FF              JPEG
+#   47 49 46 38           GIF, as GIF8
+#   42 4D                 BMP, as BM
+#   52 49 46 46 .. WEBP   WebP, a RIFF container with WEBP at byte 8
+# Plain text never starts with them, so they are never wrong.
 # Then JSON: the first character that is not whitespace is { or [,
 # and jq parses the whole payload.
 # Without jq the payload stays text, since shell code, logs
 # and set literals look like JSON too often to guess without a parser.
 # Anything else is text/plain.
-# A file name never decides: a pipe has none.
+# A file name never decides: a pipe has none, and a name can lie.
 #
 # Arguments:
 #   1: The name of the variable that takes the MIME type.
@@ -425,6 +435,8 @@ function __cp_sniff_mime() {
     return 0
   fi
 
+  # jq reads the whole payload, so the cheap check comes first:
+  # jq runs only when the first visible character is { or [.
   __cp_find_first_visible_character first_character "${payload_path}"
   case "${first_character}" in
     '{' | '[')
@@ -493,6 +505,9 @@ function __cp_trim_whitespace() {
 
   # read -d '' reads all of stdin, and it returns 1 at the end of stdin.
   IFS= read -r -d '' content || true
+
+  # The inner expansion finds the run of whitespace at one end,
+  # and the outer one removes it: first at the start, then at the end.
   content="${content#"${content%%[![:space:]]*}"}"
   content="${content%"${content##*[![:space:]]}"}"
 
@@ -648,6 +663,10 @@ function __cp_image_format_to_mime() {
 
 # region Argument parsing
 
+# Each flag with a value has a small function of its own,
+# so each fits on a screen and has tests of its own,
+# and the loop of __cp_parse_arguments holds no option bodies.
+
 #######################################
 # Read the MIME type of --type MIME or --type=MIME.
 #
@@ -732,6 +751,8 @@ function __cp_parse_image_flag() {
 function __cp_parse_arguments() {
   local -n _parsed_options_ref=$1
   local -n _positional_ref=$2
+  # The helpers get the name that the caller gave, never this nameref:
+  # a helper whose nameref had the same name would point at itself.
   local -r options_name="$1"
   local -i used_count=0
   shift 2
@@ -927,7 +948,9 @@ function __cp_run_backend() {
 #
 # A piped stdin goes to the file as it is;
 # otherwise the words of the text go there, joined by spaces,
-# with no newline added. No input at all is a usage error.
+# with no newline added, as __cp_run_argument_mode joins them,
+# so the sniffer sees the bytes that reach the backend.
+# No input at all is a usage error.
 # The caller removes the file, also when this function fails.
 #
 # Arguments:
@@ -1100,6 +1123,8 @@ function __cp_stream_with_prelude() {
 #
 # The pipeline: stdin | __cp_stream_with_prelude | __cp_filter_and_write.
 # pipefail stays in the subshell, so the caller's shell keeps its options.
+# `|| write_status=$?` keeps the status of the subshell:
+# inside the then of `if ! (...)`, $? would already be 0.
 #
 # Arguments:
 #   1: 1 to keep ANSI escape sequences.
@@ -1229,10 +1254,12 @@ function __cp_copy() {
     "mime=${options['mime_type']:-<none>}" \
     "positional-count=${#positional[@]}"
 
+  # An explicit MIME type, or --append, turns auto-detection off.
   __cp_validate_options options || return
   __cp_debug "${options['is_debug']}" 'options-validated' \
     "auto=${options['should_detect_mime']}"
 
+  # The backend comes with the MIME type of the user, if there is one.
   __cp_resolve_backend backend_command "${options['mime_type']}" || return
   __cp_debug "${options['is_debug']}" 'backend-resolved' \
     "backend=${backend_command[0]}"
@@ -1253,6 +1280,7 @@ function __cp_copy() {
     fi
   fi
 
+  # --append saves the clipboard first, to put the new text after it.
   __cp_capture_prelude "${prelude_path_name}" "${options['should_append']}" \
     || return
   if ((options['should_append'])); then
@@ -1260,7 +1288,8 @@ function __cp_copy() {
       "path=${_copy_prelude_path_ref}"
   fi
 
-  # The buffer holds the payload, however the user gave it.
+  # The text comes from the buffer when auto-detection read it,
+  # from stdin when stdin is a pipe, and from the arguments otherwise.
   if ((options['should_detect_mime'])); then
     __cp_debug "${options['is_debug']}" 'pipeline-start' 'mode=pipe'
     __cp_run_pipeline "${options['is_raw']}" "${options['should_trim']}" \
