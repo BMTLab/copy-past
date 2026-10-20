@@ -3,7 +3,8 @@
 # On a `v*.*.*` tag push,
 # builds a tarball via `git archive`,
 # generates a SHA-256 checksum,
-# and creates a GitHub Release.
+# and creates a GitHub Release
+# whose notes are the section of CHANGELOG.md for the version.
 #
 # `git archive` respects the `export-ignore` attributes
 # from .gitattributes,
@@ -38,6 +39,7 @@ jobs:
       ### Exit codes
       ERR_VERSION_MISMATCH: 21
       ERR_ARCHIVE_FAILED: 22
+      ERR_NOTES_MISSING: 23
 
     steps:
       - name: ⚙️ Checkout
@@ -287,6 +289,111 @@ jobs:
 
 # endregion
 
+# region Release notes
+
+      # The notes of a release are its section of CHANGELOG.md,
+      # as the tag holds it, so they never drift from the file;
+      # how to install and check the tarball follows.
+      # A tag whose version has no section fails here,
+      # before anything is published.
+      - name: 📝 Write release notes
+        env:
+          TAG: ${{ inputs.version }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -o errexit -o nounset -o pipefail
+
+          #######################################
+          # Print the section of CHANGELOG.md for one version:
+          # the lines below its heading, up to the next heading
+          # or the link references at the end of the file.
+          #
+          # Arguments:
+          #   1: The version, such as 1.2.0.
+          # Outputs:
+          #   The section, to stdout.
+          #######################################
+          function print_changelog_section() {
+            local -r version="$1"
+
+            awk -v heading="## [${version}]" '
+              index($0, heading) == 1 { is_inside = 1; next }
+              is_inside && (/^## \[/ || /^\[[^]]+\]: /) { exit }
+              is_inside { print }
+            ' CHANGELOG.md
+          }
+
+          #######################################
+          # Print how to install the tarball of a release,
+          # and how to check its checksum and its provenance.
+          #
+          # Arguments:
+          #   1: The tag, such as v1.2.0.
+          #   2: The repository, such as BMTLab/copy-past.
+          # Outputs:
+          #   Markdown, to stdout.
+          #######################################
+          function print_install_notes() {
+            local -r tag="$1"
+            local -r repository="$2"
+            local -r archive="copy-past-${tag}.tar.gz"
+            local -r base_url="https://github.com/${repository}/releases/download/${tag}"
+            # Three backticks, without a backtick in the code.
+            local -r fence=$'\x60\x60\x60'
+
+            printf '%s\n' \
+              '---' \
+              '' \
+              '### Install' \
+              '' \
+              "${fence}bash" \
+              "curl -LO ${base_url}/${archive}" \
+              "curl -LO ${base_url}/${archive}.sha256" \
+              "sha256sum --check ${archive}.sha256" \
+              "tar -xzf ${archive}" \
+              "make -C copy-past-${tag} install INSTALL_MODE=copy" \
+              "${fence}" \
+              '' \
+              'GitHub attests where the tarball was built:' \
+              '' \
+              "${fence}bash" \
+              "gh attestation verify ${archive} --repo ${repository}" \
+              "${fence}"
+          }
+
+          #######################################
+          # Entrypoint.
+          #
+          # Globals:
+          #   TAG, REPOSITORY (read).
+          #######################################
+          function main() {
+            local section
+
+            section="$(print_changelog_section "${TAG#v}")"
+            # The command substitution drops the blank lines at the end;
+            # the ones at the start go here.
+            section="${section#"${section%%[!$'\n']*}"}"
+            if [[ -z "${section//[[:space:]]/}" ]]; then
+              echo "::error title=Release notes::CHANGELOG.md has no section for ${TAG#v}" >&2
+
+              return "${ERR_NOTES_MISSING}"
+            fi
+
+            {
+              printf '%s\n\n' "${section}"
+              print_install_notes "${TAG}" "${REPOSITORY}"
+            } >release-notes.md
+
+            echo '::group::Release notes'
+            cat release-notes.md
+            echo '::endgroup::'
+          }
+
+          main "$@"
+
+# endregion
+
 # region Publish GitHub Release
 
       - name: 🛳️ Create GitHub Release
@@ -295,12 +402,10 @@ jobs:
         with:
           tag_name: ${{ inputs.version }}
           name: ${{ inputs.version }}
-          # We let GitHub auto-generate release notes
-          # from the commit history
-          # between the previous tag and this one.
-          # CHANGELOG.md (when maintained by hand) can be linked
-          # from the release body; we do not duplicate its content
-          # in the release UI to avoid drift.
+          # The notes come from CHANGELOG.md, written above;
+          # GitHub appends its generated notes after them,
+          # with the link to every commit since the previous tag.
+          body_path: release-notes.md
           generate_release_notes: true
           append_body: false
           # Release the tarball before the .sha256,
