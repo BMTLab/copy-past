@@ -17,8 +17,8 @@
 # See: copy --help, README.md, tests/.
 #
 # How it works:
-#   The payload comes from stdin when stdin is no terminal,
-#   and from the arguments, joined by spaces, otherwise;
+#   The payload is the arguments, joined by spaces;
+#   without arguments, stdin, unless stdin is a terminal.
 #   copy adds no newline of its own.
 #   ANSI escape sequences go, so a paste into a GUI app is clean text,
 #   unless --raw keeps them.
@@ -81,6 +81,9 @@ copy - write text or binary data to system clipboard
 Description:
   Detects the display server (Wayland/X11) and uses the appropriate tool
   (wl-copy, xclip, or xsel) to copy data to the clipboard.
+
+  The text comes from the arguments, joined by spaces;
+  without arguments, copy reads it from stdin.
 
   By default, ANSI escape sequences (colors, bold, hyperlinks, etc.)
   are stripped so that pasted text works correctly in GUI applications.
@@ -946,10 +949,12 @@ function __cp_run_backend() {
 #######################################
 # Buffer the payload in a temporary file, to sniff it and then write it.
 #
-# A piped stdin goes to the file as it is;
-# otherwise the words of the text go there, joined by spaces,
+# The words of the text go to the file, joined by spaces,
 # with no newline added, as __cp_run_argument_mode joins them,
 # so the sniffer sees the bytes that reach the backend.
+# Without words, stdin goes there as it is, unless it is a terminal.
+# The words come first: the stdin of cron or of an agent's shell
+# is no terminal, yet it holds no input and may never end.
 # No input at all is a usage error.
 # The caller removes the file, also when this function fails.
 #
@@ -967,15 +972,15 @@ function __cp_buffer_input() {
 
   _buffer_path_ref="$(command mktemp -t copy-auto.XXXXXX)" || return
 
-  if [[ ! -t 0 ]]; then
-    command cat >"${_buffer_path_ref}" || return
+  if (($# > 0)); then
+    printf -v joined_words '%s ' "$@"
+    printf '%s' "${joined_words% }" >"${_buffer_path_ref}"
 
     return 0
   fi
 
-  if (($# > 0)); then
-    printf -v joined_words '%s ' "$@"
-    printf '%s' "${joined_words% }" >"${_buffer_path_ref}"
+  if [[ ! -t 0 ]]; then
+    command cat >"${_buffer_path_ref}" || return
 
     return 0
   fi
@@ -1224,7 +1229,7 @@ function __cp_run_argument_mode() {
 #   3...: The options and the words of the text; see __cp_usage.
 #
 # Inputs:
-#   The payload, on stdin, when stdin is no terminal.
+#   The payload, on stdin, when no words of the text are given.
 #
 # Returns:
 #   0 on success, or an exit code from the header.
@@ -1289,13 +1294,14 @@ function __cp_copy() {
   fi
 
   # The text comes from the buffer when auto-detection read it,
-  # from stdin when stdin is a pipe, and from the arguments otherwise.
+  # else from the words of the text, and from stdin only without them,
+  # when stdin is no terminal; no input at all is a usage error.
   if ((options['should_detect_mime'])); then
     __cp_debug "${options['is_debug']}" 'pipeline-start' 'mode=pipe'
     __cp_run_pipeline "${options['is_raw']}" "${options['should_trim']}" \
       "${_copy_prelude_path_ref}" "${backend_command[@]}" \
       <"${_copy_buffer_path_ref}" || return
-  elif [[ ! -t 0 ]]; then
+  elif ((${#positional[@]} == 0)) && [[ ! -t 0 ]]; then
     __cp_debug "${options['is_debug']}" 'pipeline-start' 'mode=pipe'
     __cp_run_pipeline "${options['is_raw']}" "${options['should_trim']}" \
       "${_copy_prelude_path_ref}" "${backend_command[@]}" || return
@@ -1321,7 +1327,7 @@ function __cp_copy() {
 #   $@: The options and the words of the text; see __cp_usage.
 #
 # Inputs:
-#   The payload, on stdin, when stdin is no terminal.
+#   The payload, on stdin, when no words of the text are given.
 #
 # Returns:
 #   0 on success, or an exit code from the header.

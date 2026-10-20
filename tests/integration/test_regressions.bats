@@ -218,4 +218,74 @@ done
 
 # endregion copy refuses an image that xsel cannot take
 
+# region copy takes its arguments over stdin
+
+@test "copy writes its arguments when stdin is /dev/null" {
+  # Arrange:
+  # cron, systemd and the shell of an agent give no terminal as stdin;
+  # copy once read that stdin instead of its arguments,
+  # and wrote an empty clipboard.
+
+  # Act
+  run --separate-stderr run_snippet "copy 'agent text' </dev/null"
+
+  # Assert
+  ((status == 0))
+  [[ "$(print_clipboard)" == 'agent text' ]]
+}
+
+@test "copy with arguments returns while its stdin stays open" {
+  # Arrange:
+  # the stdin of an agent's shell may never end, and copy once waited for it.
+  # A FIFO open for reading and writing at once never ends a read,
+  # and no process runs on that bats would wait for.
+  local -r fifo_path="${BATS_TEST_TMPDIR}/stdin.fifo"
+  local -i fifo_fd=0
+  mkfifo -- "${fifo_path}"
+  exec {fifo_fd}<>"${fifo_path}"
+
+  # Act: timeout ends a hang after 10 s.
+  run --separate-stderr timeout 10 "${COPY_PAST_ROOT}/copy.sh" 'agent text' \
+    <&"${fifo_fd}"
+
+  # Assert
+  ((status == 0))
+  [[ "$(print_clipboard)" == 'agent text' ]]
+}
+
+#######################################
+# Check that copy takes its arguments over a piped stdin.
+#
+# Arguments:
+#   1: The clipboard expected.
+#   2...: The options of copy.
+#######################################
+function arguments_win_over_stdin() {
+  # Arrange: the clipboard holds old text, and stdin holds other text.
+  local -r expected="$1"
+  local -r options="${*:2}"
+  set_clipboard 'old '
+
+  # Act
+  run --separate-stderr run_snippet "printf 'piped' | copy ${options} argument"
+
+  # Assert
+  ((status == 0))
+  [[ "$(print_clipboard)" == "${expected}" ]]
+}
+
+bats_test_function --description "copy takes its arguments over a piped stdin" \
+  -- arguments_win_over_stdin 'argument'
+bats_test_function \
+  --description "copy --no-auto takes its arguments over a piped stdin" \
+  -- arguments_win_over_stdin 'argument' --no-auto
+bats_test_function \
+  --description "copy --raw takes its arguments over a piped stdin" \
+  -- arguments_win_over_stdin 'argument' --raw
+bats_test_function \
+  --description "copy --append takes its arguments over a piped stdin" \
+  -- arguments_win_over_stdin 'old argument' --append
+
+# endregion copy takes its arguments over stdin
+
 ### End

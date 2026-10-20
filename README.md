@@ -113,8 +113,9 @@ copy [options] [text...]
 echo 'text' | copy
 ```
 
-When stdin is piped in,
-it takes precedence over arguments.
+The arguments win over stdin:
+copy reads stdin only when no text comes as arguments,
+so a script, cron or an AI agent can pass text without a terminal.
 
 #### Options
 

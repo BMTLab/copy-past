@@ -25,6 +25,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   no longer under Environment.
 - copy and past need bash 4.4 or newer, no longer 4.3:
   run as programs, they turn on `shopt -s inherit_errexit`.
+- The arguments of copy win over stdin: copy reads stdin
+  only when no text comes as arguments, as wl-copy does.
+  stdin came first whenever it was no terminal,
+  so in a script, in cron or in the shell of an AI agent,
+  `copy 'text'` hung while stdin stayed open,
+  or wrote an empty clipboard from /dev/null.
 
 ### Fixed
 
