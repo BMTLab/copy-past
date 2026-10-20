@@ -28,6 +28,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Sourced into an interactive shell, `copy TEXT` no longer ends the shell.
+  copy handed the payload to its pipeline with `exec`,
+  which took the stdin of the shell itself:
+  the shell read the end of the file and quit right after copy.
+- `copy TEXT` writes the words exactly, joined by spaces.
+  With auto-detection, the default, it added a newline at the end,
+  and `copy --no-auto TEXT` removed the newlines that the text ended with.
+- `copy -- -n` writes `-n`, and so do `-e` and `-E`.
+  copy wrote an empty clipboard, since `echo` took them for its own options.
+- `copy --append` works through the links that `make install` makes.
+  copy looked only for a `past.sh` beside the link,
+  found none, and failed with exit 4.
+- With the xsel backend, copy refuses an image that it detects
+  with exit 5, `COPY_ERR_TYPE_MISMATCH`, and leaves the clipboard alone.
+  It printed the error, then wrote an empty clipboard and exited 0.
 - copy and past run with the first bash on PATH
   (`#!/usr/bin/env bash`), no longer with `/bin/bash`.
   On macOS, a bash from Homebrew now runs them,

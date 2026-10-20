@@ -538,7 +538,8 @@ function __cp_filter_and_write() {
 # Find the command that reads the clipboard for --append.
 #
 # A shell that sourced past.sh has the function past, which comes first.
-# Otherwise bash runs the past.sh that lies beside copy.sh.
+# Otherwise bash runs the past.sh that lies beside copy.sh,
+# or the past that make install links beside the link copy.
 #
 # Arguments:
 #   1: The name of the array that takes the command.
@@ -548,7 +549,7 @@ function __cp_filter_and_write() {
 #######################################
 function __cp_resolve_past() {
   local -n _past_command_ref=$1
-  local script_directory='.'
+  local script_directory='.' past_path
 
   if declare -F past >/dev/null; then
     _past_command_ref=(past)
@@ -559,11 +560,13 @@ function __cp_resolve_past() {
   if [[ "${BASH_SOURCE[0]}" == */* ]]; then
     script_directory="${BASH_SOURCE[0]%/*}"
   fi
-  if [[ -r "${script_directory:-/}/past.sh" ]]; then
-    _past_command_ref=(command bash "${script_directory:-/}/past.sh")
+  for past_path in "${script_directory:-/}/past.sh" "${script_directory:-/}/past"; do
+    if [[ -r "${past_path}" ]]; then
+      _past_command_ref=(command bash "${past_path}")
 
-    return 0
-  fi
+      return 0
+    fi
+  done
 
   return "${COPY_ERR_GENERAL}"
 }
@@ -923,8 +926,9 @@ function __cp_run_backend() {
 # Buffer the payload in a temporary file, to sniff it and then write it.
 #
 # A piped stdin goes to the file as it is;
-# otherwise the words of the text go there, joined by spaces.
-# No input at all is a usage error.
+# otherwise the words of the text go there, joined by spaces,
+# with no newline added. No input at all is a usage error.
+# The caller removes the file, also when this function fails.
 #
 # Arguments:
 #   1: The name of the variable that takes the path of the file.
@@ -935,6 +939,7 @@ function __cp_run_backend() {
 #######################################
 function __cp_buffer_input() {
   local -n _buffer_path_ref=$1
+  local joined_words
   shift
 
   _buffer_path_ref="$(command mktemp -t copy-auto.XXXXXX)" || return
@@ -946,16 +951,12 @@ function __cp_buffer_input() {
   fi
 
   if (($# > 0)); then
-    (
-      IFS=' '
-      echo "$*"
-    ) >"${_buffer_path_ref}"
+    printf -v joined_words '%s ' "$@"
+    printf '%s' "${joined_words% }" >"${_buffer_path_ref}"
 
     return 0
   fi
 
-  command rm -f -- "${_buffer_path_ref}"
-  _buffer_path_ref=''
   __cp_usage >&2
   __cp_fail "${COPY_ERR_USAGE}" 'no input' \
     'pass the text as arguments, or pipe it to stdin' \
@@ -963,8 +964,7 @@ function __cp_buffer_input() {
 }
 
 #######################################
-# Write a buffered payload to the backend as it is, with no filter,
-# and remove the buffer.
+# Write a buffered payload to the backend as it is, with no filter.
 #
 # A binary payload takes this way, since the filters would break it.
 #
@@ -977,13 +977,9 @@ function __cp_buffer_input() {
 #######################################
 function __cp_write_buffer_raw() {
   local -r buffer_path="$1"
-  local -i write_status=0
   shift
 
-  __cp_run_backend "$@" <"${buffer_path}" || write_status=$?
-  command rm -f -- "${buffer_path}"
-
-  if ((write_status != 0)); then
+  if ! __cp_run_backend "$@" <"${buffer_path}"; then
     __cp_fail "${COPY_ERR_BACKEND_FAILED}" 'the clipboard backend failed' \
       'see its message above; COPY_PAST_BACKEND picks another backend' \
       || return
@@ -999,9 +995,7 @@ function __cp_write_buffer_raw() {
 #
 # A binary payload goes to the backend as it is, with its MIME type,
 # and the variable in $2 takes 1.
-# A text payload becomes the stdin of the shell, through exec,
-# so the text pipeline reads the same bytes.
-# The buffer is removed on both ways.
+# A text payload stays in the buffer, for the text pipeline to read.
 #
 # Arguments:
 #   1: The name of the backend command array.
@@ -1010,7 +1004,8 @@ function __cp_write_buffer_raw() {
 #   4: 1 when the debug log is on.
 #
 # Returns:
-#   0 on success, COPY_ERR_BACKEND_FAILED when the backend fails.
+#   0 on success, COPY_ERR_TYPE_MISMATCH when the backend takes
+#   no MIME type, COPY_ERR_BACKEND_FAILED when the backend fails.
 #######################################
 function __cp_run_auto_detect() {
   local -n _auto_command_ref=$1
@@ -1018,7 +1013,6 @@ function __cp_run_auto_detect() {
   local -r buffer_path="$3"
   local -ir is_debug="$4"
   local sniffed_mime=''
-  local -i mime_status=0
 
   _is_written_ref=0
   __cp_sniff_mime sniffed_mime "${buffer_path}" || return
@@ -1027,19 +1021,11 @@ function __cp_run_auto_detect() {
   if [[ "${sniffed_mime}" == 'text/plain' ]]; then
     __cp_debug "${is_debug}" 'auto-detect-text' \
       'action=fall-through-to-pipeline'
-    exec <"${buffer_path}"
-    command rm -f -- "${buffer_path}"
 
     return 0
   fi
 
-  if ! __cp_apply_mime "$1" "${sniffed_mime}"; then
-    mime_status=$?
-    command rm -f -- "${buffer_path}"
-
-    return "${mime_status}"
-  fi
-
+  __cp_apply_mime "$1" "${sniffed_mime}" || return
   __cp_debug "${is_debug}" 'auto-detect-binary' \
     "mime=${sniffed_mime}" 'action=stream-buffer'
   __cp_write_buffer_raw "${buffer_path}" "${_auto_command_ref[@]}" || return
@@ -1150,8 +1136,8 @@ function __cp_run_pipeline() {
 #######################################
 # Write the words of the text to the clipboard, joined by spaces.
 #
-# The joined text goes through the same pipeline as a piped payload.
-# IFS=' ' stays in a subshell, so the caller keeps its own IFS.
+# The joined text goes through the same pipeline as a piped payload,
+# with no newline added and none removed.
 #
 # Arguments:
 #   1: 1 to keep ANSI escape sequences.
@@ -1169,7 +1155,7 @@ function __cp_run_argument_mode() {
   local -ir should_trim="$2"
   local -r prelude_path="$3"
   local -n _argument_command_ref=$4
-  local input_text
+  local joined_words
   local -i write_status=0
   shift 4
 
@@ -1180,14 +1166,11 @@ function __cp_run_argument_mode() {
       || return
   fi
 
-  input_text="$(
-    IFS=' '
-    echo "$*"
-  )"
+  printf -v joined_words '%s ' "$@"
 
   (
     set -o pipefail
-    printf '%s' "${input_text}" \
+    printf '%s' "${joined_words% }" \
       | __cp_stream_with_prelude "${prelude_path}" \
       | __cp_filter_and_write "${is_raw}" "${should_trim}" \
         "${_argument_command_ref[@]}"
@@ -1205,14 +1188,15 @@ function __cp_run_argument_mode() {
 # region Public API
 
 #######################################
-# Write text or binary data to the clipboard.
+# Write text or binary data to the clipboard: the work of copy.
 #
 # Each step lives in a helper, so the body reads as a list of steps.
-# The state lives in this function and goes to the helpers by name,
-# so each call starts clean, even in a shell that sourced the file.
+# The paths of the temporary files go to copy, which removes them.
 #
 # Arguments:
-#   $@: The options and the words of the text; see __cp_usage.
+#   1: The name of the variable that takes the path of the buffer.
+#   2: The name of the variable that takes the path of the saved clipboard.
+#   3...: The options and the words of the text; see __cp_usage.
 #
 # Inputs:
 #   The payload, on stdin, when stdin is no terminal.
@@ -1220,11 +1204,15 @@ function __cp_run_argument_mode() {
 # Returns:
 #   0 on success, or an exit code from the header.
 #######################################
-function copy() {
+function __cp_copy() {
+  local -n _copy_buffer_path_ref=$1
+  local -n _copy_prelude_path_ref=$2
+  local -r buffer_path_name="$1"
+  local -r prelude_path_name="$2"
   local -A options=()
   local -a positional=() backend_command=()
-  local buffer_path='' prelude_path=''
-  local -i is_written=0 write_status=0
+  local -i is_written=0
+  shift 2
 
   __cp_init_options options
   __cp_parse_arguments options positional "$@" || return
@@ -1249,51 +1237,80 @@ function copy() {
   __cp_debug "${options['is_debug']}" 'backend-resolved' \
     "backend=${backend_command[0]}"
 
-  # Auto-detection writes a binary payload itself.
-  # A text payload goes on to the pipeline through stdin,
-  # however the user gave it, so the words of the text are spent.
+  # Auto-detection writes a binary payload itself;
+  # a text payload stays in the buffer for the pipeline.
   if ((options['should_detect_mime'])); then
-    __cp_buffer_input buffer_path "${positional[@]}" || return
+    __cp_buffer_input "${buffer_path_name}" "${positional[@]}" || return
     __cp_debug "${options['is_debug']}" 'auto-detect-start' \
-      "buffer=${buffer_path}"
+      "buffer=${_copy_buffer_path_ref}"
 
-    __cp_run_auto_detect backend_command is_written "${buffer_path}" \
-      "${options['is_debug']}" || return
+    __cp_run_auto_detect backend_command is_written \
+      "${_copy_buffer_path_ref}" "${options['is_debug']}" || return
     if ((is_written)); then
       __cp_debug "${options['is_debug']}" 'done' 'mode=auto-binary'
 
       return 0
     fi
-    positional=()
   fi
 
-  __cp_capture_prelude prelude_path "${options['should_append']}" || return
+  __cp_capture_prelude "${prelude_path_name}" "${options['should_append']}" \
+    || return
   if ((options['should_append'])); then
     __cp_debug "${options['is_debug']}" 'prelude-captured' \
-      "path=${prelude_path}"
+      "path=${_copy_prelude_path_ref}"
   fi
 
-  if [[ ! -t 0 ]] || ((options['should_detect_mime'])); then
+  # The buffer holds the payload, however the user gave it.
+  if ((options['should_detect_mime'])); then
     __cp_debug "${options['is_debug']}" 'pipeline-start' 'mode=pipe'
     __cp_run_pipeline "${options['is_raw']}" "${options['should_trim']}" \
-      "${prelude_path}" "${backend_command[@]}" \
-      || write_status=$?
+      "${_copy_prelude_path_ref}" "${backend_command[@]}" \
+      <"${_copy_buffer_path_ref}" || return
+  elif [[ ! -t 0 ]]; then
+    __cp_debug "${options['is_debug']}" 'pipeline-start' 'mode=pipe'
+    __cp_run_pipeline "${options['is_raw']}" "${options['should_trim']}" \
+      "${_copy_prelude_path_ref}" "${backend_command[@]}" || return
   else
     __cp_debug "${options['is_debug']}" 'pipeline-start' 'mode=argument'
     __cp_run_argument_mode "${options['is_raw']}" "${options['should_trim']}" \
-      "${prelude_path}" backend_command "${positional[@]}" \
-      || write_status=$?
+      "${_copy_prelude_path_ref}" backend_command "${positional[@]}" \
+      || return
   fi
 
+  __cp_debug "${options['is_debug']}" 'done' 'mode=pipeline'
+}
+
+#######################################
+# Write text or binary data to the clipboard.
+#
+# The state lives in __cp_copy and goes to the helpers by name,
+# so each call starts clean, even in a shell that sourced the file.
+# copy itself removes the temporary files on every way out,
+# since an EXIT trap would replace the trap of a shell that sourced it.
+#
+# Arguments:
+#   $@: The options and the words of the text; see __cp_usage.
+#
+# Inputs:
+#   The payload, on stdin, when stdin is no terminal.
+#
+# Returns:
+#   0 on success, or an exit code from the header.
+#######################################
+function copy() {
+  local buffer_path='' prelude_path=''
+  local -i copy_status=0
+
+  __cp_copy buffer_path prelude_path "$@" || copy_status=$?
+
+  if [[ -n "${buffer_path}" ]]; then
+    command rm -f -- "${buffer_path}"
+  fi
   if [[ -n "${prelude_path}" ]]; then
     command rm -f -- "${prelude_path}"
   fi
 
-  if ((write_status == 0)); then
-    __cp_debug "${options['is_debug']}" 'done' 'mode=pipeline'
-  fi
-
-  return "${write_status}"
+  return "${copy_status}"
 }
 
 # endregion Public API

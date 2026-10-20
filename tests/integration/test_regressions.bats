@@ -98,4 +98,124 @@ function setup() {
 
 # endregion copy keeps the backend off the output of its caller
 
+# region copy leaves the shell that sourced it alone
+
+@test "copy sourced into a shell leaves the stdin of that shell alone" {
+  # Arrange:
+  # in argument mode, copy once handed the buffered payload on with exec,
+  # which took the stdin of the shell that sourced copy.sh:
+  # an interactive shell then read EOF and ended right after copy.
+  local -r report_path="${BATS_TEST_TMPDIR}/stdin-after-copy"
+
+  # Act
+  run_in_terminal "
+    $(print_snippet_prelude copy.sh)
+    copy hello
+    if [[ -t 0 ]]; then
+      printf 'terminal' >${report_path@Q}
+    else
+      printf 'no terminal' >${report_path@Q}
+    fi
+  " >/dev/null
+
+  # Assert
+  [[ "$(<"${report_path}")" == 'terminal' ]]
+  [[ "$(print_clipboard)" == 'hello' ]]
+}
+
+# endregion copy leaves the shell that sourced it alone
+
+# region copy writes its arguments exactly
+
+#######################################
+# Check that copy writes the words of the text exactly:
+# joined by spaces, with no newline added and none removed.
+#
+# Arguments:
+#   1: The bytes expected in the clipboard, as hex.
+#   2...: The command line of copy, as shell code.
+#######################################
+function argument_mode_writes_the_words_exactly() {
+  # Arrange: the command line is the input.
+  local -r expected_hex="$1"
+  local -r command_line="${*:2}"
+
+  # Act
+  run --separate-stderr run_copy_in_terminal "${command_line}"
+
+  # Assert
+  ((status == 0))
+  [[ "$(print_clipboard_hex)" == "${expected_hex}" ]]
+}
+
+# Samples: "command line|hex". Auto-detection once added a newline,
+# --no-auto once dropped the newlines at the end of the words,
+# and echo once took -n, -e and -E for its own options.
+ARGUMENT_SAMPLES=(
+  "'hello world'|68656c6c6f20776f726c64"
+  "--no-auto 'hello world'|68656c6c6f20776f726c64"
+  "\$'line\\n'|6c696e650a"
+  "--no-auto \$'line\\n'|6c696e650a"
+  '-- -n|2d6e'
+  '-- -e|2d65'
+  '-- -E|2d45'
+  '--no-auto -- -n|2d6e'
+)
+
+for argument_sample in "${ARGUMENT_SAMPLES[@]}"; do
+  bats_test_function \
+    --description "copy ${argument_sample%%|*} writes exactly ${argument_sample#*|}" \
+    -- argument_mode_writes_the_words_exactly "${argument_sample#*|}" \
+    "${argument_sample%%|*}"
+done
+
+# endregion copy writes its arguments exactly
+
+# region copy --append through the installed link
+
+@test "copy run through the installed link appends with past beside it" {
+  # Arrange:
+  # make install links copy and past, without .sh, into one directory,
+  # and copy once looked only for a past.sh next to the link.
+  local -r link_directory="${BATS_TEST_TMPDIR}/bin"
+  local -r payload_path="${BATS_TEST_TMPDIR}/payload.txt"
+  mkdir -p -- "${link_directory}"
+  ln -s -- "${COPY_PAST_ROOT}/copy.sh" "${link_directory}/copy"
+  ln -s -- "${COPY_PAST_ROOT}/past.sh" "${link_directory}/past"
+  set_clipboard 'old '
+  printf '%s' 'new' >"${payload_path}"
+
+  # Act
+  run --separate-stderr "${link_directory}/copy" --append <"${payload_path}"
+
+  # Assert
+  ((status == 0))
+  [[ "$(print_clipboard)" == 'old new' ]]
+}
+
+# endregion copy --append through the installed link
+
+# region copy refuses an image that xsel cannot take
+
+@test "copy with xsel refuses a detected image and leaves the clipboard alone" {
+  # Arrange:
+  # xsel takes no MIME type; copy once printed the error,
+  # then wrote an empty clipboard and exited 0.
+  enable_fake_xsel
+  set_clipboard 'previous'
+
+  # Act
+  run --separate-stderr run_snippet '
+    export COPY_PAST_BACKEND=xsel
+    printf "\x89PNG\r\n\x1a\nrest" | copy
+  '
+
+  # Assert
+  ((status == COPY_ERR_TYPE_MISMATCH))
+  [[ "${stderr}" == *'xsel does not support MIME types'* ]]
+  [[ "$(print_clipboard)" == 'previous' ]]
+}
+
+# endregion copy refuses an image that xsel cannot take
+
 ### End

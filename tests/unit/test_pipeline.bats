@@ -40,9 +40,9 @@ function setup() {
     printf '%s' \"\${buffer_path}\" >${path_file@Q}
   " >/dev/null
 
-  # Assert
+  # Assert: the words, with no newline after them.
   buffer_path="$(<"${path_file}")"
-  [[ "$(<"${buffer_path}")" == 'first second third' ]]
+  [[ "$(print_hex <"${buffer_path}")" == "$(printf '%s' 'first second third' | print_hex)" ]]
 }
 
 @test "__cp_buffer_input refuses no input at all with the usage code" {
