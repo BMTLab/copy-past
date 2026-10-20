@@ -148,6 +148,52 @@ function run_without_backends() {
     run_without_backends "${COPY_PAST_ROOT}" "$@"
 }
 
+#######################################
+# Run a command, and stop it once it runs longer than a limit.
+#
+# macOS has no timeout, so bash keeps the time:
+# the command runs in the background, and a loop waits for its end.
+#
+# Arguments:
+#   1: The limit, in seconds.
+#   2...: The command.
+#
+# Inputs:
+#   The stdin of the command.
+#
+# Returns:
+#   The status of the command, or 124 when it ran too long, as timeout does.
+#######################################
+function run_with_time_limit() {
+  local -ir limit="$1"
+  local -i command_pid=0 waited_tenths=0 command_status=0
+  shift
+
+  # A background command reads /dev/null unless it names its stdin,
+  # so the stdin of this function goes to it on purpose.
+  "$@" <&0 &
+  command_pid=$!
+
+  while kill -0 "${command_pid}" 2>/dev/null; do
+    if ((waited_tenths >= limit * 10)); then
+      # A bash that waits for a child runs its TERM trap only after the child,
+      # so the children go first. The command may end at any moment here,
+      # so a signal that finds no process is fine.
+      pkill -TERM -P "${command_pid}" 2>/dev/null || true
+      kill -TERM "${command_pid}" 2>/dev/null || true
+      wait "${command_pid}" 2>/dev/null || true
+
+      return 124
+    fi
+    sleep 0.1
+    waited_tenths=$((waited_tenths + 1))
+  done
+
+  wait "${command_pid}" || command_status=$?
+
+  return "${command_status}"
+}
+
 # endregion A new bash
 
 # region A terminal

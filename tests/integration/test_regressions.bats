@@ -252,9 +252,9 @@ bats_test_function --description "copy --no-auto -- -n writes -n" \
   mkfifo -- "${fifo_path}"
   exec {fifo_fd}<>"${fifo_path}"
 
-  # Act: timeout ends a hang after 10 s.
-  run --separate-stderr timeout 10 "${COPY_PAST_ROOT}/copy.sh" 'agent text' \
-    <&"${fifo_fd}"
+  # Act: a hang ends after 10 s, with status 124.
+  run --separate-stderr run_with_time_limit 10 \
+    "${COPY_PAST_ROOT}/copy.sh" 'agent text' <&"${fifo_fd}"
 
   # Assert
   ((status == 0))
