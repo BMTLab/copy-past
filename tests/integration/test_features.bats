@@ -42,7 +42,7 @@ function setup() {
   set_clipboard 'hello '
 
   # Act
-  run --separate-stderr run_copy_in_terminal '--append world'
+  run --separate-stderr run_copy_in_terminal --append world
 
   # Assert
   ((status == 0))
@@ -224,14 +224,15 @@ function setup() {
 }
 
 @test "copy writes a text payload larger than a pipe buffer byte for byte" {
+  local -r payload_path="${BATS_TEST_TMPDIR}/large.txt"
+
   # Arrange:
   # auto-detection reads only the start of the payload,
   # and a pipe holds 64 KiB, so the payload is far larger.
-  local -r payload_path="${BATS_TEST_TMPDIR}/large.txt"
   printf 'line %06d of a large payload\n' {1..10000} >"${payload_path}"
 
   # Act
-  run --separate-stderr run_snippet "copy <${payload_path@Q}"
+  run --separate-stderr run_snippet 'copy <"$1"' "${payload_path}"
 
   # Assert
   ((status == 0))
@@ -256,10 +257,11 @@ function setup() {
 }
 
 @test "past --image prints binary bytes as they are, NUL bytes too" {
+  local -r output_path="${BATS_TEST_TMPDIR}/past-image.bin"
+
   # Arrange:
   # the newline fix of wl-paste goes through $(...), which loses NUL bytes,
   # so an image must skip it.
-  local -r output_path="${BATS_TEST_TMPDIR}/past-image.bin"
   printf 'a\x00b' >"${FAKE_CLIPBOARD_FILE}"
 
   # Act:
@@ -281,11 +283,12 @@ function setup() {
 #   1: The option: --append or --trim.
 #######################################
 function text_option_refuses_image() {
-  # Arrange
   local -r option="$1"
 
+  # Arrange: the option is the input.
+
   # Act
-  run --separate-stderr run_snippet "printf 'x' | copy ${option} --image"
+  run --separate-stderr run_snippet 'printf x | copy "$1" --image' "${option}"
 
   # Assert
   ((status == COPY_ERR_TYPE_MISMATCH))

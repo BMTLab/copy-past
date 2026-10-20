@@ -14,12 +14,13 @@ function setup() {
 # region Defaults
 
 @test "__cp_init_options sets every option of copy to its default" {
-  # Arrange: every option starts with a wrong value.
   local -A options=(
     ['is_raw']=9 ['should_trim']=9 ['should_append']=9
     ['should_detect_mime']=9 ['is_debug']=9 ['should_show_help']=9
     ['mime_type']='dirty'
   )
+
+  # Arrange: every option starts with a wrong value.
 
   # Act
   __cp_init_options options
@@ -35,10 +36,11 @@ function setup() {
 }
 
 @test "__ps_init_options sets every option of past to its default" {
-  # Arrange
   local -A options=(
     ['is_debug']=9 ['should_show_help']=9 ['mime_type']='dirty'
   )
+
+  # Arrange: every option starts with a wrong value.
 
   # Act
   __ps_init_options options
@@ -64,13 +66,14 @@ function setup() {
 #   4...: The flag, and the argument after it, if any.
 #######################################
 function type_flag_gives_its_mime_type() {
-  # Arrange: the flag and its argument are the input.
   local -r parser="$1"
   local -r expected_mime="$2"
   local -ir expected_count="$3"
   local -A options=(['mime_type']='')
   local -i used_count=0
   shift 3
+
+  # Arrange: the flag and its argument are the input.
 
   # Act
   "${parser}" options used_count "$@"
@@ -89,13 +92,14 @@ function type_flag_gives_its_mime_type() {
 #   3...: The flag, and the argument after it, if any.
 #######################################
 function type_flag_refuses_an_empty_mime_type() {
-  # Arrange
   local -r parser="$1"
   local -r usage_code_name="$2"
   local -ir usage_code="${!usage_code_name}"
   local -A options=(['mime_type']='')
   local -i used_count=0
   shift 2
+
+  # Arrange: the flag without a MIME type is the input.
 
   # Act
   run --separate-stderr "${parser}" options used_count "$@"
@@ -139,11 +143,12 @@ done
 #   3: The MIME type expected.
 #######################################
 function image_flag_gives_its_mime_type() {
-  # Arrange: the flag is the input.
   local -r parser="$1"
   local -r flag="$2"
   local -r expected_mime="$3"
   local -A options=(['mime_type']='' ['is_raw']=0)
+
+  # Arrange: the flag is the input.
 
   # Act
   "${parser}" options "${flag}"
@@ -164,8 +169,9 @@ for parser_name in __cp_parse_image_flag __ps_parse_image_flag; do
 done
 
 @test "__cp_parse_image_flag keeps an image payload raw" {
-  # Arrange
   local -A options=(['mime_type']='' ['is_raw']=0)
+
+  # Arrange: the options start without a MIME type.
 
   # Act
   __cp_parse_image_flag options '--image'
@@ -175,12 +181,13 @@ done
 }
 
 @test "__cp_parse_image_flag refuses --image= and leaves the options alone" {
-  # Arrange:
-  # the call runs in this shell, not through run,
-  # so the test sees what it does to the options.
   local -A options=(['mime_type']='' ['is_raw']=0)
   local -r stderr_path="${BATS_TEST_TMPDIR}/stderr"
   local -i code=0
+
+  # Arrange:
+  # the call runs in this shell, not through run,
+  # so the test sees what it does to the options.
 
   # Act
   __cp_parse_image_flag options '--image=' 2>"${stderr_path}" || code=$?
@@ -197,9 +204,10 @@ done
 # region The command line of copy
 
 @test "__cp_parse_arguments reads every option of a full command line" {
-  # Arrange
   local -A options=()
   local -a positional=()
+
+  # Arrange
   __cp_init_options options
 
   # Act
@@ -216,9 +224,10 @@ done
 }
 
 @test "__cp_parse_arguments reads --type MIME across two arguments" {
-  # Arrange
   local -A options=()
   local -a positional=()
+
+  # Arrange
   __cp_init_options options
 
   # Act
@@ -237,10 +246,11 @@ done
 #   1: The flag: -j or --json.
 #######################################
 function json_flag_sets_json_and_raw() {
-  # Arrange
   local -r flag="$1"
   local -A options=()
   local -a positional=()
+
+  # Arrange
   __cp_init_options options
 
   # Act
@@ -259,9 +269,10 @@ for flag_name in -j --json; do
 done
 
 @test "__cp_parse_arguments takes the words after -- as text" {
-  # Arrange
   local -A options=()
   local -a positional=()
+
+  # Arrange
   __cp_init_options options
 
   # Act
@@ -273,9 +284,10 @@ done
 }
 
 @test "__cp_parse_arguments refuses an unknown option with the usage code" {
-  # Arrange
   local -A options=()
   local -a positional=()
+
+  # Arrange
   __cp_init_options options
 
   # Act
@@ -287,11 +299,12 @@ done
 }
 
 @test "__cp_parse_arguments stops at --help and asks for the help" {
+  local -A options=()
+  local -a positional=()
+
   # Arrange:
   # --bogus after --help would be an error,
   # so success shows that the parsing stops at --help.
-  local -A options=()
-  local -a positional=()
   __cp_init_options options
 
   # Act
@@ -306,8 +319,9 @@ done
 # region The command line of past
 
 @test "__ps_parse_arguments reads --json and --debug" {
-  # Arrange
   local -A options=()
+
+  # Arrange
   __ps_init_options options
 
   # Act
@@ -319,8 +333,9 @@ done
 }
 
 @test "__ps_parse_arguments stops at --help and asks for the help" {
-  # Arrange
   local -A options=()
+
+  # Arrange
   __ps_init_options options
 
   # Act
@@ -331,8 +346,9 @@ done
 }
 
 @test "__ps_parse_arguments refuses a word that is no option with the usage code" {
-  # Arrange
   local -A options=()
+
+  # Arrange
   __ps_init_options options
 
   # Act
@@ -354,10 +370,11 @@ done
 #   1: The flag: -d, --debug or --verbose.
 #######################################
 function copy_debug_flag_turns_on_the_log() {
-  # Arrange
   local -r flag="$1"
   local -A options=()
   local -a positional=()
+
+  # Arrange
   __cp_init_options options
 
   # Act
@@ -374,9 +391,10 @@ function copy_debug_flag_turns_on_the_log() {
 #   1: The flag: -d, --debug or --verbose.
 #######################################
 function past_debug_flag_turns_on_the_log() {
-  # Arrange
   local -r flag="$1"
   local -A options=()
+
+  # Arrange
   __ps_init_options options
 
   # Act
@@ -408,11 +426,12 @@ done
 #   3: The text of the message expected.
 #######################################
 function text_option_refuses_binary_mime() {
-  # Arrange
   local -r option_key="$1"
   local -r mime_type="$2"
   local -r expected_message="$3"
   local -A options=()
+
+  # Arrange
   __cp_init_options options
   options["${option_key}"]=1
   options['mime_type']="${mime_type}"
@@ -437,8 +456,9 @@ for mime_name in image/png application/octet-stream; do
 done
 
 @test "__cp_validate_options turns auto-detection off for an explicit MIME type" {
-  # Arrange
   local -A options=()
+
+  # Arrange
   __cp_init_options options
   options['mime_type']='application/json'
 
@@ -450,8 +470,9 @@ done
 }
 
 @test "__cp_validate_options turns auto-detection off for --append" {
-  # Arrange
   local -A options=()
+
+  # Arrange
   __cp_init_options options
   options['should_append']=1
 
@@ -463,8 +484,9 @@ done
 }
 
 @test "__cp_validate_options keeps auto-detection on for plain options" {
-  # Arrange
   local -A options=()
+
+  # Arrange
   __cp_init_options options
 
   # Act

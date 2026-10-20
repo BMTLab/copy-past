@@ -21,10 +21,11 @@ function setup() {
 #   2: The text expected.
 #######################################
 function strip_ansi_removes_the_sequence() {
-  # Arrange: the input is the payload.
   local -r input="$1"
   local -r expected="$2"
   local stripped
+
+  # Arrange: the input is the payload.
 
   # Act
   stripped="$(printf '%b' "${input}" | __cp_strip_ansi)"
@@ -53,8 +54,9 @@ for ansi_sample in "${ANSI_SAMPLES[@]}"; do
 done
 
 @test "__cp_strip_ansi keeps newlines and tabs" {
-  # Arrange: whitespace sits between the escape sequences.
   local stripped
+
+  # Arrange: whitespace sits between the escape sequences.
 
   # Act
   stripped="$(printf '\033[31ma\033[0m\n\033[32mb\033[0m\tc' | __cp_strip_ansi)"
@@ -68,8 +70,9 @@ done
 # region __cp_trim_whitespace
 
 @test "__cp_trim_whitespace removes the whitespace at both ends" {
-  # Arrange: spaces, a tab and newlines around the text.
   local trimmed
+
+  # Arrange: spaces, a tab and newlines around the text.
 
   # Act
   trimmed="$(printf '  \t\nmiddle  \n' | __cp_trim_whitespace)"
@@ -79,8 +82,9 @@ done
 }
 
 @test "__cp_trim_whitespace keeps the whitespace inside" {
-  # Arrange: spaces, a tab and a newline inside the text.
   local -r output_path="${BATS_TEST_TMPDIR}/trimmed.txt"
+
+  # Arrange: spaces, a tab and a newline inside the text.
 
   # Act
   printf '  a b\tc\nd  ' | __cp_trim_whitespace >"${output_path}"
@@ -90,8 +94,9 @@ done
 }
 
 @test "__cp_trim_whitespace prints nothing for whitespace alone" {
-  # Arrange: only whitespace.
   local -r output_path="${BATS_TEST_TMPDIR}/trimmed.txt"
+
+  # Arrange: only whitespace.
 
   # Act
   printf '   \t\n  ' | __cp_trim_whitespace >"${output_path}"

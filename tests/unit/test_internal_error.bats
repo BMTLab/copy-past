@@ -12,36 +12,76 @@ function setup() {
 }
 
 #######################################
-# Call a handler as the ERR trap would, from inside a helper.
+# Run a handler of the ERR trap in a new bash, from a script file,
+# as a program runs it: at the top level, inside a helper,
+# or inside the entry function, which bears the name of the tool.
+#
+# bats puts frames of its own into FUNCNAME, and bash -c gives none
+# for the top level: only bash running a file has the frames of a program.
 #
 # Arguments:
-#   1: The handler: __cp_internal_error or __ps_internal_error.
-#   2...: Its arguments: the status, the line and the command.
+#   1: The script that defines the handler: copy.sh or past.sh.
+#   2: The handler: __cp_internal_error or __ps_internal_error.
+#   3: Where the handler runs: top-level, helper or entry.
+#   4...: Its arguments: the status, the line and the command.
+#
+# Globals:
+#   COPY_PAST_ROOT: read.
 #######################################
-function fail_inside_a_helper() {
-  local -r handler="$1"
+function run_internal_error() {
+  local -r script_name="$1"
+  local -r runner_path="${BATS_TEST_TMPDIR}/internal_error.sh"
+  local prelude
   shift
 
+  prelude="$(print_snippet_prelude "${script_name}")"
+  printf '%s\n' "${prelude}" '
+entry_name="$1"
+handler="$2"
+place="$3"
+shift 3
+function failing_helper() {
   "${handler}" "$@"
+}
+# Stand-ins for the entry functions, defined after the source.
+function copy() {
+  "${handler}" "$@"
+}
+function past() {
+  "${handler}" "$@"
+}
+case "${place}" in
+  helper) failing_helper "$@" ;;
+  entry) "${entry_name}" "$@" ;;
+  *) "${handler}" "$@" ;;
+esac' >"${runner_path}"
+
+  bash "${runner_path}" "${COPY_PAST_ROOT}" "${script_name%.sh}" "$@"
 }
 
 #######################################
-# Check that a failure inside a helper names its line and command,
+# Check that a failure inside a function names its line and command,
 # and ends the run with the internal code.
 #
 # Arguments:
-#   1: The handler: __cp_internal_error or __ps_internal_error.
-#   2: The tool: copy or past.
-#   3: The name of the internal code, such as COPY_ERR_INTERNAL.
+#   1: The script: copy.sh or past.sh.
+#   2: The handler.
+#   3: The tool: copy or past.
+#   4: The name of the internal code, such as COPY_ERR_INTERNAL.
+#   5: Where the handler runs: helper or entry.
 #######################################
-function helper_failure_reports_and_exits_internal() {
+function failure_reports_and_exits_internal() {
+  local -r script_name="$1"
+  local -r handler="$2"
+  local -r tool="$3"
+  local -ir internal_code="${!4}"
+  local -r place="$5"
+
   # Arrange: status 9 at line 42, from the command false.
-  local -r handler="$1"
-  local -r tool="$2"
-  local -ir internal_code="${!3}"
 
   # Act
-  run --separate-stderr fail_inside_a_helper "${handler}" 9 42 'false'
+  run --separate-stderr run_internal_error "${script_name}" "${handler}" \
+    "${place}" 9 42 'false'
 
   # Assert
   ((status == internal_code))
@@ -50,71 +90,54 @@ function helper_failure_reports_and_exits_internal() {
 
 #######################################
 # Check that a status passes on as it is, without a message:
-# the 141 of a closed pipe, or the internal code of a subshell
-# that has already reported.
+# a code that the entry function returns to the top level,
+# the 141 of a closed pipe, or the internal code
+# of a subshell that has already reported.
 #
 # Arguments:
-#   1: The handler: __cp_internal_error or __ps_internal_error.
-#   2: The status.
+#   1: The script: copy.sh or past.sh.
+#   2: The handler.
+#   3: Where the handler runs: top-level or helper.
+#   4: The status.
 #######################################
 function status_passes_on_silently() {
+  local -r script_name="$1"
+  local -r handler="$2"
+  local -r place="$3"
+  local -ir failed_status="$4"
+
   # Arrange: the status is the input.
-  local -r handler="$1"
-  local -ir failed_status="$2"
 
   # Act
-  run --separate-stderr fail_inside_a_helper "${handler}" "${failed_status}" 1 'cmd'
+  run --separate-stderr run_internal_error "${script_name}" "${handler}" \
+    "${place}" "${failed_status}" 1 'cmd'
 
   # Assert
   ((status == failed_status))
   [[ -z "${stderr}" ]]
 }
 
-@test "__cp_internal_error passes on a code that copy returns" {
-  # Arrange:
-  # a stand-in for copy calls the handler, as the trap does
-  # when a helper returns a code to copy; the helper has reported.
-  function copy() {
-    __cp_internal_error 4 7 'return 4'
-  }
-
-  # Act
-  run --separate-stderr copy
-
-  # Assert
-  ((status == 4))
-  [[ -z "${stderr}" ]]
-}
-
-@test "__ps_internal_error passes on a code that past returns" {
-  # Arrange: a stand-in for past, as for copy above.
-  function past() {
-    __ps_internal_error 4 7 'return 4'
-  }
-
-  # Act
-  run --separate-stderr past
-
-  # Assert
-  ((status == 4))
-  [[ -z "${stderr}" ]]
-}
-
-for tool_sample in 'copy|__cp_internal_error|COPY_ERR_INTERNAL' \
-  'past|__ps_internal_error|PAST_ERR_INTERNAL'; do
-  tool_name="${tool_sample%%|*}"
-  handler_rest="${tool_sample#*|}"
-  handler_name="${handler_rest%%|*}"
+for handler_sample in 'copy.sh|__cp_internal_error|copy|COPY_ERR_INTERNAL' \
+  'past.sh|__ps_internal_error|past|PAST_ERR_INTERNAL'; do
+  IFS='|' read -r script_name handler_name tool_name code_name <<<"${handler_sample}"
   bats_test_function \
     --description "${handler_name} reports a failure in a helper and exits 70" \
-    -- helper_failure_reports_and_exits_internal "${handler_name}" "${tool_name}" \
-    "${handler_rest#*|}"
+    -- failure_reports_and_exits_internal "${script_name}" \
+    "${handler_name}" "${tool_name}" "${code_name}" helper
+  # A check for the name of the entry function once let this one pass in silence.
+  bats_test_function \
+    --description "${handler_name} reports a failure in the body of ${tool_name} and exits 70" \
+    -- failure_reports_and_exits_internal "${script_name}" \
+    "${handler_name}" "${tool_name}" "${code_name}" entry
+  bats_test_function \
+    --description "${handler_name} passes on a code that ${tool_name} returns" \
+    -- status_passes_on_silently "${script_name}" "${handler_name}" top-level 4
   bats_test_function \
     --description "${handler_name} passes on the 141 of a closed pipe" \
-    -- status_passes_on_silently "${handler_name}" 141
+    -- status_passes_on_silently "${script_name}" "${handler_name}" helper 141
   bats_test_function \
     --description "${handler_name} passes on the 70 of a subshell that reported" \
-    -- status_passes_on_silently "${handler_name}" 70
+    -- status_passes_on_silently "${script_name}" "${handler_name}" helper 70
 done
 
 ### End

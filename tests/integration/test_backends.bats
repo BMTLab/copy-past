@@ -36,16 +36,17 @@ function setup() {
 #   2: The backend command expected.
 #######################################
 function backend_value_picks_its_backend() {
-  # Arrange
   local -r backend_value="$1"
   local -r expected_backend="$2"
   local -r payload="via ${backend_value}"
 
+  # Arrange: the value of COPY_PAST_BACKEND is the input.
+
   # Act
-  run --separate-stderr run_snippet "
-    export COPY_PAST_BACKEND=${backend_value@Q}
-    printf '%s' ${payload@Q} | copy --debug
-  "
+  run --separate-stderr run_snippet '
+    export COPY_PAST_BACKEND="$1"
+    printf "%s" "$2" | copy --debug
+  ' "${backend_value}" "${payload}"
 
   # Assert
   ((status == 0))
@@ -72,10 +73,10 @@ done
   # Arrange: bogus names no backend.
 
   # Act
-  run --separate-stderr run_snippet "
+  run --separate-stderr run_snippet '
     export COPY_PAST_BACKEND=bogus
-    printf '%s' 'x' | copy --no-auto
-  "
+    printf "%s" x | copy --no-auto
+  '
 
   # Assert
   ((status == COPY_ERR_USAGE))
@@ -97,10 +98,11 @@ done
 }
 
 @test "COPY_PAST_BACKEND=xclip without xclip reports a missing backend" {
+  local prelude bash_path
+
   # Arrange:
   # PATH holds only the fakes, without xclip,
   # so an xclip of the host cannot answer for the fake.
-  local prelude bash_path
   prelude="$(print_snippet_prelude copy.sh)"
   bash_path="$(command -v bash)"
   rm -f -- "${FAKE_BIN}/xclip"
@@ -108,7 +110,8 @@ done
   # Act
   run --separate-stderr env -i HOME="${HOME}" PATH="${FAKE_BIN}" \
     COPY_PAST_BACKEND=xclip \
-    "${bash_path}" -c "${prelude}"$'\n'"printf '%s' 'x' | copy"
+    "${bash_path}" -c "${prelude}"$'\n''printf x | copy' \
+    no-xclip "${COPY_PAST_ROOT}"
 
   # Assert
   ((status == COPY_ERR_NO_BACKEND))
@@ -127,16 +130,17 @@ done
 #   1: The value of COPY_PAST_BACKEND.
 #######################################
 function backend_round_trips_plain_text() {
-  # Arrange
   local -r backend_value="$1"
   local -r payload="round-trip-${backend_value}"
 
+  # Arrange: the value of COPY_PAST_BACKEND is the input.
+
   # Act
-  run --separate-stderr run_snippet "
-    export COPY_PAST_BACKEND=${backend_value@Q}
-    printf '%s' ${payload@Q} | copy
+  run --separate-stderr run_snippet '
+    export COPY_PAST_BACKEND="$1"
+    printf "%s" "$2" | copy
     past
-  "
+  ' "${backend_value}" "${payload}"
 
   # Assert
   ((status == 0))
@@ -162,17 +166,18 @@ done
 #   3: The MIME type expected.
 #######################################
 function backend_takes_a_mime_flag() {
-  # Arrange:
-  # an explicit flag decides the MIME type, so the payload does not matter.
   local -r backend_value="$1"
   local -r flag="$2"
   local -r expected_mime="$3"
 
+  # Arrange:
+  # an explicit flag decides the MIME type, so the payload does not matter.
+
   # Act
-  run --separate-stderr run_snippet "
-    export COPY_PAST_BACKEND=${backend_value@Q}
-    printf '%s' '{\"k\":1}' | copy --debug ${flag}
-  "
+  run --separate-stderr run_snippet '
+    export COPY_PAST_BACKEND="$1"
+    printf "%s" "{\"k\":1}" | copy --debug "$2"
+  ' "${backend_value}" "${flag}"
 
   # Assert
   ((status == 0))
@@ -197,14 +202,15 @@ done
 #   1: The flag: --json or --image.
 #######################################
 function xsel_refuses_a_copy_mime_flag() {
-  # Arrange
   local -r flag="$1"
 
+  # Arrange: the flag is the input.
+
   # Act
-  run --separate-stderr run_snippet "
+  run --separate-stderr run_snippet '
     export COPY_PAST_BACKEND=xsel
-    printf '%s' 'x' | copy ${flag}
-  "
+    printf "%s" x | copy "$1"
+  ' "${flag}"
 
   # Assert
   ((status == COPY_ERR_TYPE_MISMATCH))
@@ -245,18 +251,19 @@ done
 #   3...: The options of past.
 #######################################
 function past_reads_the_way_of_its_backend() {
-  # Arrange:
-  # stdout goes away, so binary output stays out of the test log.
   local -r backend_value="$1"
   local -r expected_mode="$2"
-  local -r flags="${*:3}"
+
+  # Arrange:
+  # stdout goes away, so binary output stays out of the test log.
   set_clipboard 'placeholder'
 
   # Act
-  run --separate-stderr run_snippet "
-    export COPY_PAST_BACKEND=${backend_value@Q}
-    past --debug ${flags} >/dev/null
-  "
+  run --separate-stderr run_snippet '
+    export COPY_PAST_BACKEND="$1"
+    shift
+    past --debug "$@" >/dev/null
+  ' "${backend_value}" "${@:3}"
 
   # Assert
   ((status == 0))

@@ -101,22 +101,22 @@ function setup() {
 # region copy leaves the shell that sourced it alone
 
 @test "copy sourced into a shell leaves the stdin of that shell alone" {
+  local -r report_path="${BATS_TEST_TMPDIR}/stdin-after-copy"
+
   # Arrange:
   # in argument mode, copy once handed the buffered payload on with exec,
   # which took the stdin of the shell that sourced copy.sh:
   # an interactive shell then read EOF and ended right after copy.
-  local -r report_path="${BATS_TEST_TMPDIR}/stdin-after-copy"
 
   # Act
-  run_in_terminal "
-    $(print_snippet_prelude copy.sh)
+  run_in_terminal '
     copy hello
     if [[ -t 0 ]]; then
-      printf 'terminal' >${report_path@Q}
+      printf terminal >"$1"
     else
-      printf 'no terminal' >${report_path@Q}
+      printf "no terminal" >"$1"
     fi
-  " >/dev/null
+  ' "${report_path}" >/dev/null
 
   # Assert
   [[ "$(<"${report_path}")" == 'terminal' ]]
@@ -133,52 +133,59 @@ function setup() {
 #
 # Arguments:
 #   1: The bytes expected in the clipboard, as hex.
-#   2...: The command line of copy, as shell code.
+#   2...: The arguments of copy.
 #######################################
 function argument_mode_writes_the_words_exactly() {
-  # Arrange: the command line is the input.
   local -r expected_hex="$1"
-  local -r command_line="${*:2}"
+  shift
+
+  # Arrange: the arguments are the input.
 
   # Act
-  run --separate-stderr run_copy_in_terminal "${command_line}"
+  run --separate-stderr run_copy_in_terminal "$@"
 
   # Assert
   ((status == 0))
   [[ "$(print_clipboard_hex)" == "${expected_hex}" ]]
 }
 
-# Samples: "command line|hex". Auto-detection once added a newline,
+# Auto-detection once added a newline,
 # --no-auto once dropped the newlines at the end of the words,
 # and echo once took -n, -e and -E for its own options.
-ARGUMENT_SAMPLES=(
-  "'hello world'|68656c6c6f20776f726c64"
-  "--no-auto 'hello world'|68656c6c6f20776f726c64"
-  "\$'line\\n'|6c696e650a"
-  "--no-auto \$'line\\n'|6c696e650a"
-  '-- -n|2d6e'
-  '-- -e|2d65'
-  '-- -E|2d45'
-  '--no-auto -- -n|2d6e'
-)
+bats_test_function --description "copy 'hello world' writes the words exactly" \
+  -- argument_mode_writes_the_words_exactly 68656c6c6f20776f726c64 'hello world'
+bats_test_function \
+  --description "copy --no-auto 'hello world' writes the words exactly" \
+  -- argument_mode_writes_the_words_exactly 68656c6c6f20776f726c64 \
+  --no-auto 'hello world'
+bats_test_function \
+  --description "copy keeps the newline that its words end with" \
+  -- argument_mode_writes_the_words_exactly 6c696e650a $'line\n'
+bats_test_function \
+  --description "copy --no-auto keeps the newline that its words end with" \
+  -- argument_mode_writes_the_words_exactly 6c696e650a --no-auto $'line\n'
 
-for argument_sample in "${ARGUMENT_SAMPLES[@]}"; do
+# Samples: "flag|hex".
+for echo_sample in '-n|2d6e' '-e|2d65' '-E|2d45'; do
   bats_test_function \
-    --description "copy ${argument_sample%%|*} writes exactly ${argument_sample#*|}" \
-    -- argument_mode_writes_the_words_exactly "${argument_sample#*|}" \
-    "${argument_sample%%|*}"
+    --description "copy -- ${echo_sample%%|*} writes ${echo_sample%%|*}" \
+    -- argument_mode_writes_the_words_exactly "${echo_sample#*|}" \
+    -- "${echo_sample%%|*}"
 done
+bats_test_function --description "copy --no-auto -- -n writes -n" \
+  -- argument_mode_writes_the_words_exactly 2d6e --no-auto -- -n
 
 # endregion copy writes its arguments exactly
 
 # region copy --append through the installed link
 
 @test "copy run through the installed link appends with past beside it" {
+  local -r link_directory="${BATS_TEST_TMPDIR}/bin"
+  local -r payload_path="${BATS_TEST_TMPDIR}/payload.txt"
+
   # Arrange:
   # make install links copy and past, without .sh, into one directory,
   # and copy once looked only for a past.sh next to the link.
-  local -r link_directory="${BATS_TEST_TMPDIR}/bin"
-  local -r payload_path="${BATS_TEST_TMPDIR}/payload.txt"
   mkdir -p -- "${link_directory}"
   ln -s -- "${COPY_PAST_ROOT}/copy.sh" "${link_directory}/copy"
   ln -s -- "${COPY_PAST_ROOT}/past.sh" "${link_directory}/past"
@@ -235,12 +242,13 @@ done
 }
 
 @test "copy with arguments returns while its stdin stays open" {
+  local -r fifo_path="${BATS_TEST_TMPDIR}/stdin.fifo"
+  local -i fifo_fd=0
+
   # Arrange:
   # the stdin of an agent's shell may never end, and copy once waited for it.
   # A FIFO open for reading and writing at once never ends a read,
   # and no process runs on that bats would wait for.
-  local -r fifo_path="${BATS_TEST_TMPDIR}/stdin.fifo"
-  local -i fifo_fd=0
   mkfifo -- "${fifo_path}"
   exec {fifo_fd}<>"${fifo_path}"
 
@@ -261,13 +269,13 @@ done
 #   2...: The options of copy.
 #######################################
 function arguments_win_over_stdin() {
-  # Arrange: the clipboard holds old text, and stdin holds other text.
   local -r expected="$1"
-  local -r options="${*:2}"
+
+  # Arrange: the clipboard holds old text, and stdin holds other text.
   set_clipboard 'old '
 
   # Act
-  run --separate-stderr run_snippet "printf 'piped' | copy ${options} argument"
+  run --separate-stderr run_snippet 'printf piped | copy "$@" argument' "${@:2}"
 
   # Assert
   ((status == 0))

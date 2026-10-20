@@ -140,8 +140,9 @@ function __ps_fail() {
 #   3: The command.
 #######################################
 function __ps_internal_error() {
-  if [[ "${FUNCNAME[1]:-main}" == 'main' || "${FUNCNAME[1]}" == 'past' ]] \
-    || (($1 == 141 || $1 == PAST_ERR_INTERNAL)); then
+  # In the guard, FUNCNAME holds only this function and the top level:
+  # the command that failed there is past, which returned its code.
+  if ((${#FUNCNAME[@]} == 2 || $1 == 141 || $1 == PAST_ERR_INTERNAL)); then
     exit "$1"
   fi
 
@@ -679,7 +680,7 @@ function past() {
     __ps_debug "${options['is_debug']}" 'read-strategy' 'mode=direct-exec'
   fi
 
-  __ps_print_clipboard "${is_binary_mime}" "${backend_command[@]}"
+  __ps_print_clipboard "${is_binary_mime}" "${backend_command[@]}" || return
 }
 
 # endregion Public API

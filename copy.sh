@@ -180,8 +180,9 @@ function __cp_fail() {
 #   3: The command.
 #######################################
 function __cp_internal_error() {
-  if [[ "${FUNCNAME[1]:-main}" == 'main' || "${FUNCNAME[1]}" == 'copy' ]] \
-    || (($1 == 141 || $1 == COPY_ERR_INTERNAL)); then
+  # In the guard, FUNCNAME holds only this function and the top level:
+  # the command that failed there is copy, which returned its code.
+  if ((${#FUNCNAME[@]} == 2 || $1 == 141 || $1 == COPY_ERR_INTERNAL)); then
     exit "$1"
   fi
 

@@ -34,10 +34,11 @@ function setup() {
 #   2: The bytes expected, as hex.
 #######################################
 function past_keeps_every_byte() {
-  # Arrange
   local -r clipboard="$1"
   local -r expected_hex="$2"
   local -r output_path="${BATS_TEST_TMPDIR}/past.out"
+
+  # Arrange
   printf '%b' "${clipboard}" >"${FAKE_CLIPBOARD_FILE}"
 
   # Act:
@@ -131,7 +132,8 @@ bats_test_function \
   # as a reload of ~/.bashrc does; a readonly constant must not fail.
 
   # Act
-  run --separate-stderr run_snippet "source ${COPY_PAST_ROOT@Q}/past.sh && printf ok"
+  run --separate-stderr run_snippet 'source "$1/past.sh" && printf ok' \
+    "${COPY_PAST_ROOT}"
 
   # Assert
   ((status == 0))

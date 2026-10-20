@@ -22,11 +22,12 @@ function setup() {
 #   3: The MIME type expected.
 #######################################
 function image_format_turns_into_its_mime_type() {
-  # Arrange: the format is the input.
   local -r mapper="$1"
   local -r image_format="$2"
   local -r expected_mime="$3"
   local mime_type=''
+
+  # Arrange: the format is the input.
 
   # Act
   "${mapper}" mime_type "${image_format}"
@@ -71,10 +72,11 @@ done
 #   3: 0 when the type is binary, 1 when it is text.
 #######################################
 function mime_type_counts_as_binary_or_text() {
-  # Arrange: the MIME type is the input.
   local -r predicate="$1"
   local -r mime_type="$2"
   local -ir expected_status="$3"
+
+  # Arrange: the MIME type is the input.
 
   # Act
   run "${predicate}" "${mime_type}"
@@ -101,8 +103,9 @@ done
 # region MIME types for the backend
 
 @test "__cp_apply_mime adds --type to wl-copy" {
-  # Arrange
   local -a backend_command=(wl-copy)
+
+  # Arrange: the command holds no MIME type yet.
 
   # Act
   __cp_apply_mime backend_command 'application/json'
@@ -112,8 +115,9 @@ done
 }
 
 @test "__cp_apply_mime adds -t to xclip after its own options" {
-  # Arrange
   local -a backend_command=(xclip -selection clipboard -in)
+
+  # Arrange: the command holds no MIME type yet.
 
   # Act
   __cp_apply_mime backend_command 'text/html'
@@ -123,8 +127,9 @@ done
 }
 
 @test "__ps_apply_mime adds --type to wl-paste" {
-  # Arrange
   local -a backend_command=(wl-paste)
+
+  # Arrange: the command holds no MIME type yet.
 
   # Act
   __ps_apply_mime backend_command 'image/png'
@@ -134,8 +139,9 @@ done
 }
 
 @test "__ps_apply_mime adds -t to xclip after its own options" {
-  # Arrange
   local -a backend_command=(xclip -selection clipboard -out)
+
+  # Arrange: the command holds no MIME type yet.
 
   # Act
   __ps_apply_mime backend_command 'application/json'
@@ -154,11 +160,12 @@ done
 #   3: The MIME type.
 #######################################
 function xsel_refuses_a_mime_type() {
-  # Arrange
   local -r applier="$1"
   local -ir expected_code="${!2}"
   local -r mime_type="$3"
   local -a backend_command=(xsel --clipboard --input)
+
+  # Arrange: the command is the one of xsel.
 
   # Act
   run --separate-stderr "${applier}" backend_command "${mime_type}"
@@ -189,11 +196,12 @@ done
 #   2: The MIME type expected.
 #######################################
 function magic_bytes_give_the_mime_type() {
-  # Arrange
   local -r payload_hex="$1"
   local -r expected_mime="$2"
   local -r payload_path="${BATS_TEST_TMPDIR}/payload.bin"
   local mime_type=''
+
+  # Arrange
   xxd -r -p <<<"${payload_hex}" >"${payload_path}"
 
   # Act
@@ -220,9 +228,10 @@ for magic_sample in "${MAGIC_BYTES[@]}"; do
 done
 
 @test "__cp_sniff_mime reads plain text as text/plain" {
-  # Arrange
   local -r payload_path="${BATS_TEST_TMPDIR}/plain.txt"
   local mime_type=''
+
+  # Arrange
   printf 'just some text\n' >"${payload_path}"
 
   # Act
@@ -240,11 +249,12 @@ done
 #   2: The MIME type expected.
 #######################################
 function json_detection_reads_the_payload() {
-  # Arrange
   local -r payload="$1"
   local -r expected_mime="$2"
   local -r payload_path="${BATS_TEST_TMPDIR}/payload.txt"
   local mime_type=''
+
+  # Arrange
   if ! command -v jq >/dev/null 2>&1; then
     skip 'jq not installed; JSON detection needs it'
   fi
@@ -274,11 +284,12 @@ bats_test_function \
   -- json_detection_reads_the_payload '\0{"a":1}' 'text/plain'
 
 @test "__cp_sniff_mime finds JSON after any run of leading whitespace" {
+  local -r payload_path="${BATS_TEST_TMPDIR}/padded.json"
+  local mime_type=''
+
   # Arrange:
   # the first byte that is not whitespace decides,
   # however far into the payload it comes.
-  local -r payload_path="${BATS_TEST_TMPDIR}/padded.json"
-  local mime_type=''
   if ! command -v jq >/dev/null 2>&1; then
     skip 'jq not installed; JSON detection needs it'
   fi
@@ -300,8 +311,9 @@ bats_test_function \
 # region Backends with a MIME type
 
 @test "__cp_resolve_backend takes wl-copy under Wayland and adds the MIME type" {
-  # Arrange
   local -a backend_command=()
+
+  # Arrange: setup made a Wayland session with fake backends.
 
   # Act
   __cp_resolve_backend backend_command 'application/json'
@@ -311,11 +323,12 @@ bats_test_function \
 }
 
 @test "__cp_resolve_backend refuses a binary MIME type for xsel" {
+  local -a backend_command=()
+
   # Arrange:
   # COPY_PAST_BACKEND picks xsel on any host;
   # CI has a real xclip, which detection would pick first.
   # The MIME type fails before xsel runs, so the fake only has to exist.
-  local -a backend_command=()
   enable_fake_xsel
   export COPY_PAST_BACKEND=xsel
 
@@ -327,8 +340,9 @@ bats_test_function \
 }
 
 @test "__ps_resolve_backend takes wl-paste under Wayland and adds the MIME type" {
-  # Arrange
   local -a backend_command=()
+
+  # Arrange: setup made a Wayland session with fake backends.
 
   # Act
   __ps_resolve_backend backend_command 'application/json'

@@ -17,7 +17,7 @@ function setup() {
   # Arrange: argument mode needs a terminal as stdin; see run_in_terminal.
 
   # Act
-  run --separate-stderr run_copy_in_terminal "'hello world'"
+  run --separate-stderr run_copy_in_terminal 'hello world'
 
   # Assert
   ((status == 0))
@@ -28,7 +28,7 @@ function setup() {
   # Arrange: the second word holds spaces of its own.
 
   # Act
-  run --separate-stderr run_copy_in_terminal "line 1 'with spaces' two"
+  run --separate-stderr run_copy_in_terminal line 1 'with spaces' two
 
   # Assert
   ((status == 0))
@@ -47,14 +47,15 @@ function setup() {
 #   2: The bytes expected in the clipboard, as hex.
 #######################################
 function pipe_mode_keeps_every_byte() {
-  # Arrange
   local -r payload="$1"
   local -r expected_hex="$2"
   local -r payload_path="${BATS_TEST_TMPDIR}/payload.txt"
+
+  # Arrange
   printf '%b' "${payload}" >"${payload_path}"
 
   # Act
-  run --separate-stderr run_snippet "copy <${payload_path@Q}"
+  run --separate-stderr run_snippet 'copy <"$1"' "${payload_path}"
 
   # Assert
   ((status == 0))
@@ -102,7 +103,7 @@ bats_test_function \
   # Arrange: an SGR color, as an argument.
 
   # Act
-  run --separate-stderr run_copy_in_terminal "--raw $'\\033[31mred\\033[0m'"
+  run --separate-stderr run_copy_in_terminal --raw $'\033[31mred\033[0m'
 
   # Assert
   ((status == 0))
@@ -142,7 +143,7 @@ bats_test_function \
   # Arrange: --raw after -- is a word of the text.
 
   # Act
-  run --separate-stderr run_copy_in_terminal '-- --raw not-a-flag'
+  run --separate-stderr run_copy_in_terminal -- --raw not-a-flag
 
   # Assert
   ((status == 0))
@@ -178,7 +179,7 @@ bats_test_function \
   # Arrange: a terminal as stdin, and no words.
 
   # Act
-  run --separate-stderr run_copy_in_terminal ''
+  run --separate-stderr run_copy_in_terminal
 
   # Assert
   ((status == COPY_ERR_USAGE))
@@ -218,7 +219,8 @@ bats_test_function \
   # as a reload of ~/.bashrc does; a readonly constant must not fail.
 
   # Act
-  run --separate-stderr run_snippet "source ${COPY_PAST_ROOT@Q}/copy.sh && printf ok"
+  run --separate-stderr run_snippet 'source "$1/copy.sh" && printf ok' \
+    "${COPY_PAST_ROOT}"
 
   # Assert
   ((status == 0))

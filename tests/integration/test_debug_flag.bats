@@ -63,11 +63,12 @@ function setup() {
 #   1: The flag: -d, --debug or --verbose.
 #######################################
 function copy_debug_flag_prints_the_log() {
-  # Arrange
   local -r flag="$1"
 
+  # Arrange: the flag is the input.
+
   # Act
-  run --separate-stderr run_snippet "printf '%s' 'x' | copy ${flag}"
+  run --separate-stderr run_snippet 'printf x | copy "$1"' "${flag}"
 
   # Assert
   ((status == 0))
@@ -81,8 +82,9 @@ function copy_debug_flag_prints_the_log() {
 #   1: The flag: -d, --debug or --verbose.
 #######################################
 function past_debug_flag_prints_the_log() {
-  # Arrange
   local -r flag="$1"
+
+  # Arrange
   set_clipboard 'data'
 
   # Act
@@ -181,15 +183,14 @@ done
 }
 
 @test "copy --debug logs argument mode when stdin is a terminal" {
-  # Arrange:
-  # stderr goes to a file, since the terminal turns LF into CRLF.
   local -r stderr_path="${BATS_TEST_TMPDIR}/argument-mode.stderr"
 
+  # Arrange:
+  # stderr goes to a file, since the terminal turns LF into CRLF.
+
   # Act
-  run_in_terminal "
-    $(print_snippet_prelude copy.sh)
-    copy --debug --no-auto hello world 2>${stderr_path@Q}
-  " >/dev/null
+  run_in_terminal 'copy --debug --no-auto hello world 2>"$1"' "${stderr_path}" \
+    >/dev/null
 
   # Assert
   [[ "$(<"${stderr_path}")" == *'[copy debug] event=pipeline-start mode=argument'* ]]
@@ -235,9 +236,10 @@ done
 # region The format of a line
 
 @test "every debug line of copy starts with its prefix and an event" {
-  # Arrange: the format is a contract for other tools.
   local line
   local -a malformed_lines=()
+
+  # Arrange: the format is a contract for other tools.
 
   # Act
   run --separate-stderr run_snippet 'printf "%s" "x" | copy --debug --no-auto'

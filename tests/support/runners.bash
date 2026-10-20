@@ -2,6 +2,9 @@
 
 # Run copy and past for the tests: sourced here, in a new bash, or in a terminal.
 
+# A snippet for a new bash is code alone: its values come as arguments,
+# "$1" and on, never inside the code, so a quote in a value breaks nothing.
+
 # region Sourced scripts
 
 #######################################
@@ -23,13 +26,11 @@ function load_scripts() {
 
 #######################################
 # Print the lines that a new bash runs first:
-# it sources the scripts and turns on the options of their guard.
+# they source the scripts from the project root in $1, shift the root away,
+# and turn on the options of the guard.
 #
 # Arguments:
 #   $@: The scripts to source: copy.sh, past.sh or both.
-#
-# Globals:
-#   COPY_PAST_ROOT: read.
 #
 # Outputs:
 #   The lines, to stdout.
@@ -38,9 +39,9 @@ function print_snippet_prelude() {
   local script_name
 
   for script_name in "$@"; do
-    printf 'source %s/%s\n' "${COPY_PAST_ROOT@Q}" "${script_name}"
+    printf 'source "$1/%s"\n' "${script_name}"
   done
-  printf '%s\n' 'set -o nounset -o pipefail' 'shopt -s inherit_errexit'
+  printf '%s\n' 'shift' 'set -o nounset -o pipefail' 'shopt -s inherit_errexit'
 }
 
 # endregion Sourced scripts
@@ -52,14 +53,19 @@ function print_snippet_prelude() {
 #
 # Arguments:
 #   1: The snippet.
+#   2...: Its values, which it reads as "$1" and on.
+#
+# Globals:
+#   COPY_PAST_ROOT: read.
 #######################################
 function run_snippet() {
   local -r snippet="$1"
   local prelude
+  shift
 
   prelude="$(print_snippet_prelude copy.sh past.sh)"
 
-  bash -c "${prelude}"$'\n'"${snippet}"
+  bash -c "${prelude}"$'\n'"${snippet}" run_snippet "${COPY_PAST_ROOT}" "$@"
 }
 
 #######################################
@@ -67,6 +73,9 @@ function run_snippet() {
 #
 # Arguments:
 #   $@: The options of past.
+#
+# Globals:
+#   COPY_PAST_ROOT: read.
 #
 # Outputs:
 #   The output of past, to stdout, byte for byte.
@@ -80,7 +89,7 @@ function run_past_keeping_newlines() {
   bash -c "${prelude}"'
     output="$(past "$@"; printf x)"
     printf "%s" "${output%x}"
-  ' run_past_keeping_newlines "$@"
+  ' run_past_keeping_newlines "${COPY_PAST_ROOT}" "$@"
 }
 
 #######################################
@@ -90,13 +99,14 @@ function run_past_keeping_newlines() {
 #   1: The payload, as printf prints it with %b, so \033 and \n work.
 #   2...: The options of copy, such as --raw.
 #
+# Globals:
+#   COPY_PAST_ROOT: read.
+#
 # Outputs:
 #   What past read, as one line of lowercase hex.
 #######################################
 function run_roundtrip_hex() {
-  local -r payload="$1"
   local prelude
-  shift
 
   prelude="$(print_snippet_prelude copy.sh past.sh)"
 
@@ -106,7 +116,7 @@ function run_roundtrip_hex() {
     printf "%b" "${payload}" | copy "$@"
     output="$(past; printf x)"
     printf "%s" "${output%x}" | xxd -p | tr -d "\n"
-  ' run_roundtrip_hex "${payload}" "$@"
+  ' run_roundtrip_hex "${COPY_PAST_ROOT}" "$@"
 }
 
 #######################################
@@ -118,18 +128,24 @@ function run_roundtrip_hex() {
 #
 # Arguments:
 #   1: The snippet.
+#   2...: Its values, which it reads as "$1" and on.
+#
+# Globals:
+#   COPY_PAST_ROOT: read.
 #######################################
 function run_without_backends() {
   local -r snippet="$1"
   local -r empty_bin="${BATS_TEST_TMPDIR}/empty-bin"
   local prelude bash_path
+  shift
 
   prelude="$(print_snippet_prelude copy.sh past.sh)"
   bash_path="$(command -v bash)"
   mkdir -p -- "${empty_bin}"
 
   env -i HOME="${HOME}" PATH="${empty_bin}" \
-    "${bash_path}" -c "${prelude}"$'\n'"${snippet}"
+    "${bash_path}" -c "${prelude}"$'\n'"${snippet}" \
+    run_without_backends "${COPY_PAST_ROOT}" "$@"
 }
 
 # endregion A new bash
@@ -137,36 +153,51 @@ function run_without_backends() {
 # region A terminal
 
 #######################################
-# Run a snippet with a terminal as its stdin,
+# Run a snippet with a terminal as its stdin, in a bash that sourced copy.sh,
 # so copy takes its arguments as the text.
 #
 # bats gives a test no terminal, and in CI its stdin is a pipe,
 # so only a pseudo-terminal from script reaches argument mode.
-# script runs a command through /bin/sh, which knows no bash,
-# so the snippet goes into a file that bash runs.
-# The file lies in the directory of the test, which bats removes.
+# util-linux script takes its command as one string for a shell,
+# so the values go to a file beside the snippet,
+# and the snippet reads them back into "$1" and on.
+# Both files lie in the directory of the test, which bats removes.
 #
 # Arguments:
-#   $@: The snippet; the words are joined by spaces.
+#   1: The snippet.
+#   2...: Its values, which it reads as "$1" and on.
+#
+# Globals:
+#   COPY_PAST_ROOT: read.
 #
 # Outputs:
 #   The output of the snippet, with CRLF line ends from the terminal.
 #######################################
 function run_in_terminal() {
-  local -r snippet="$*"
+  local -r snippet="$1"
   local -r snippet_path="${BATS_TEST_TMPDIR}/terminal_snippet.sh"
-  local bash_path
+  local prelude bash_path
+  shift
 
+  prelude="$(print_snippet_prelude copy.sh)"
   bash_path="$(command -v bash)"
-  printf '#!%s\n%s\n' "${bash_path}" "${snippet}" >"${snippet_path}"
+  printf '%s\0' "${COPY_PAST_ROOT}" "$@" >"${BATS_TEST_TMPDIR}/terminal_values"
+  {
+    printf '#!%s\n' "${bash_path}"
+    printf '%s\n' \
+      'mapfile -d "" -t values <"${BASH_SOURCE[0]%/*}/terminal_values"' \
+      'set -- "${values[@]}"' \
+      "${prelude}" \
+      "${snippet}"
+  } >"${snippet_path}"
   chmod +x -- "${snippet_path}"
 
   if [[ "${OSTYPE}" == darwin* ]]; then
-    # BSD script takes the command after the file.
-    script -q /dev/null "${bash_path}" "${snippet_path}" </dev/null
+    # BSD script takes the command and its arguments after the file.
+    script -q /dev/null "${snippet_path}" </dev/null
   else
-    # util-linux script takes the command as one string.
-    script -qec "${bash_path} ${snippet_path@Q}" /dev/null </dev/null
+    # util-linux script takes the command as one string for a shell.
+    script -qec "${snippet_path@Q}" /dev/null </dev/null
   fi
 }
 
@@ -176,16 +207,10 @@ function run_in_terminal() {
 # Only copy.sh is sourced, so --append runs the past.sh beside it.
 #
 # Arguments:
-#   $@: The words of the command line of copy, joined by spaces:
-#       they are shell code, so a word with a space needs quotes.
+#   $@: The arguments of copy.
 #######################################
 function run_copy_in_terminal() {
-  local -r command_line="$*"
-  local prelude
-
-  prelude="$(print_snippet_prelude copy.sh)"
-
-  run_in_terminal "${prelude}"$'\n'"copy ${command_line}"
+  run_in_terminal 'copy "$@"' "$@"
 }
 
 # endregion A terminal

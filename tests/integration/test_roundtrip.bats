@@ -20,10 +20,11 @@ function setup() {
 #   3...: The options of copy.
 #######################################
 function payload_makes_a_round_trip() {
-  # Arrange: the payload and the options are the input.
   local -r payload="$1"
   local -r expected_hex="$2"
   shift 2
+
+  # Arrange: the payload and the options are the input.
 
   # Act
   run --separate-stderr run_roundtrip_hex "${payload}" "$@"
