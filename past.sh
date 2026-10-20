@@ -1,122 +1,71 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
-# Name: past.sh
-# Author: Nikita Neverov (BMTLab)
+# Print the system clipboard to stdout, on Wayland or X11.
+#
+# Usage: past [OPTIONS] > FILE, or "$(past)";
+#   `source past.sh` in ~/.bashrc gives the function past instead.
+# Effects: none: past only reads the CLIPBOARD selection;
+#   it needs a Wayland or X11 session.
+# Dependencies: wl-paste (wl-clipboard), xclip or xsel.
+# Settings: COPY_PAST_BACKEND, the backend to use:
+#   wl-clipboard, xclip or xsel (default: the first one found).
+# Exit codes: 0 success, 1 PAST_ERR_GENERAL, 2 PAST_ERR_USAGE,
+#   3 PAST_ERR_NO_BACKEND, 4 PAST_ERR_BACKEND_FAILED,
+#   5 PAST_ERR_TYPE_MISMATCH, 70 PAST_ERR_INTERNAL.
+# See: past --help, README.md, tests/.
+#
+# How it works:
+#   past prints the clipboard as it is, with no newline of its own.
+#   wl-paste adds a newline to text, and its --no-newline
+#   cuts the last line in wl-clipboard 2.2.1 and older,
+#   so past runs plain wl-paste and removes that one newline.
+#   A binary MIME type, such as image/png, skips this step,
+#   since a bash variable cannot hold NUL bytes.
+#
 # Version: 2.0.1
-# Date: 2026-10-09
-# License: MIT
-#
-# Description:
-#   Prints the content of the system clipboard (CLIPBOARD) to stdout.
-#   Useful for piping clipboard content into other commands or scripts.
-#   Integrates with KDE/Klipper and other managers automatically.
-#
-#   Behavior:
-#     - Prints content 'as is' without appending an extra newline
-#       (unless the clipboard content itself has one).
-#     - On Wayland uses `wl-paste`
-#       and strips the single trailing newline
-#       that wl-paste appends,
-#       while preserving any original trailing newlines.
-#       This is a workaround for wl-clipboard ≤ 2.2.1,
-#       where `--no-newline` truncates the last line
-#       if the clipboard content is not LF-terminated.
-#
-#   MIME type support:
-#     - --type MIME requests a specific MIME type from the backend,
-#       useful for reading binary or rich-text payloads
-#       written with `copy --type` or `copy --image`.
-#     - --json is shorthand for --type application/json.
-#     - --image[=FORMAT] is shorthand for --type image/<format>
-#       (default png).
-#       Output is binary; redirect it to a file:
-#         past --image > screenshot.png
-#
-#   Backend override:
-#     - Set COPY_PAST_BACKEND={wl-clipboard|xclip|xsel}
-#       to force a specific backend.
-#       The same variable is honored by copy.sh,
-#       so both halves of a round-trip stay consistent.
-#       xsel does not support MIME types,
-#       so non-text payloads fall back to an error there.
-#
-#   Debug logging:
-#     - --debug (alias -d / --verbose) emits structured event lines
-#       on stderr, prefixed with '[past debug]'.
-#       Format: '[past debug] event=<name> key=value key=value'.
-#       The flag is silent by default,
-#       so existing pipelines are not disturbed.
-#
-# Usage:
-#   # As a standalone script:
-#   past.sh > file.txt
-#
-#   # Sourced:
-#   source /path/to/past.sh
-#   my_var="$(past)"
-#
-#   # Binary payloads:
-#   past --image > clipboard.png
-#
-# Exit Codes:
-#   0: Success.
-#   1: PAST_ERR_GENERAL
-#      Generic error.
-#   2: PAST_ERR_USAGE
-#      Invalid usage or unknown backend override.
-#   3: PAST_ERR_NO_BACKEND
-#      No suitable clipboard utility found.
-#   4: PAST_ERR_BACKEND_FAILED
-#      The clipboard utility returned a non-zero exit code.
-#   5: PAST_ERR_TYPE_MISMATCH
-#      The active backend cannot handle the requested MIME type
-#      (e.g., xsel + --json).
-#
-# Disclaimer:
-#   This script is provided 'as is', without any warranty.
-#   Ensure required dependencies (wl-clipboard, xclip, or xsel)
-#   are installed on your system.
 
-# region Error codes
+# region Exit codes
 
-# These constants are guarded against re-declaration,
-# so the script can be sourced repeatedly in the same shell
-# without tripping `readonly`.
-
+# A shell may source this file again, for example to reload ~/.bashrc,
+# so each readonly constant is set only once.
 # bashsupport disable=BP5001
 
-if [[ -z ${PAST_ERR_GENERAL+x} ]]; then
+if [[ ! -v PAST_ERR_GENERAL ]]; then
   readonly PAST_ERR_GENERAL=1
 fi
 
-if [[ -z ${PAST_ERR_USAGE+x} ]]; then
+if [[ ! -v PAST_ERR_USAGE ]]; then
   readonly PAST_ERR_USAGE=2
 fi
 
-if [[ -z ${PAST_ERR_NO_BACKEND+x} ]]; then
+if [[ ! -v PAST_ERR_NO_BACKEND ]]; then
   readonly PAST_ERR_NO_BACKEND=3
 fi
 
-if [[ -z ${PAST_ERR_BACKEND_FAILED+x} ]]; then
+if [[ ! -v PAST_ERR_BACKEND_FAILED ]]; then
   readonly PAST_ERR_BACKEND_FAILED=4
 fi
 
-if [[ -z ${PAST_ERR_TYPE_MISMATCH+x} ]]; then
+if [[ ! -v PAST_ERR_TYPE_MISMATCH ]]; then
   readonly PAST_ERR_TYPE_MISMATCH=5
 fi
 
-# endregion
+if [[ ! -v PAST_ERR_INTERNAL ]]; then
+  readonly PAST_ERR_INTERNAL=70
+fi
+
+# endregion Exit codes
 
 # region Internal helpers
 
 #######################################
-# Print usage information.
+# Print the usage.
 #
 # Outputs:
-#   Usage text to stdout.
+#   The usage, to stdout.
 #######################################
 function __ps_usage() {
-  cat <<'EOF'
+  command cat <<'EOF'
 past - print system clipboard to stdout
 
 Description:
@@ -142,677 +91,606 @@ Options:
                         (lines prefixed with '[past debug]').
                         Has no effect on stdout or the payload.
 
-Environment:
+Settings:
   COPY_PAST_BACKEND     Force a specific backend
                         (wl-clipboard | xclip | xsel).
+
+Exit codes:
+  0   success
+  1   PAST_ERR_GENERAL: a general error
+  2   PAST_ERR_USAGE: an unknown argument or a bad value
+  3   PAST_ERR_NO_BACKEND: no clipboard backend found
+  4   PAST_ERR_BACKEND_FAILED: the clipboard backend failed to read
+  5   PAST_ERR_TYPE_MISMATCH: a MIME type that the backend cannot take
+  70  PAST_ERR_INTERNAL: a bug in past
 EOF
 }
 
 #######################################
-# Print error message and return with code.
+# Print a message to stderr and return its code.
 #
 # Arguments:
-#   1: Message text.
-#   2: Return code (optional, default: PAST_ERR_GENERAL).
+#   1: The exit code.
+#   2...: The lines of the message.
 #
 # Outputs:
-#   Error message to stderr.
+#   Each line after 'past: ', to stderr.
+#
+# Returns:
+#   The code in $1.
 #######################################
-function __ps_error() {
-  local -r message="$1"
-  local -ir code="${2:-$PAST_ERR_GENERAL}"
+function __ps_fail() {
+  local -ir code="$1"
+  shift
 
-  printf 'ERROR: %s\n' "$message" >&2
+  printf 'past: %s\n' "$@" >&2
 
-  return "$code"
+  return "${code}"
 }
 
 #######################################
-# Emit a structured debug log line on stderr.
-#
-# Mirrors __cp_debug in copy.sh
-# so both halves of a round-trip share the same log format,
-# only the script-name prefix differs:
-#
-#   [past debug] event=<name> key=value key=value
-#
-# Values that contain whitespace are wrapped in single quotes.
-# When the user has not enabled --debug the helper is a no-op,
-# so default-mode invocations stay completely silent on stderr
-# and existing user pipelines are unaffected.
+# End a run that failed where no code planned it: the ERR trap calls it.
+# It passes on unchanged a code that past returns, the 141 of a closed pipe,
+# and the internal code of a subshell that has already reported.
 #
 # Arguments:
-#   1:        debug_mode flag (0 = silent, 1 = active).
-#   2:        event name (free-form, alpha-numeric + dashes).
-#   3..N:     key=value pairs, in order.
+#   1: The status of the failed command.
+#   2: Its line.
+#   3: The command.
+#######################################
+function __ps_internal_error() {
+  if [[ "${FUNCNAME[1]:-main}" == 'main' || "${FUNCNAME[1]}" == 'past' ]] \
+    || (($1 == 141 || $1 == PAST_ERR_INTERNAL)); then
+    exit "$1"
+  fi
+
+  printf 'past: internal error at line %s (status %s): %s\n' \
+    "$2" "$1" "$3" >&2
+
+  exit "${PAST_ERR_INTERNAL}"
+}
+
+#######################################
+# Print a line of the debug log to stderr, when the log is on.
+#
+# The format is the one of __cp_debug in copy.sh,
+# so both halves of a round trip log alike:
+# [past debug] event=NAME key=value key='a value'.
+# Without --debug, past prints nothing to stderr.
+#
+# Arguments:
+#   1: 1 when the log is on, 0 when it is off.
+#   2: The name of the event.
+#   3...: The fields, each as key=value.
 #
 # Outputs:
-#   One line on stderr when debug_mode is non-zero.
+#   The line, to stderr.
 #######################################
 function __ps_debug() {
-  local -ir debug_mode=$1
-  if ((! debug_mode)); then
+  local -ir is_debug="$1"
+  local line="[past debug] event=$2"
+  local field key value
+
+  if ((! is_debug)); then
     return 0
   fi
 
-  local -r event="$2"
   shift 2
-
-  local kv pair key value suffix=''
-  for kv in "$@"; do
-    key="${kv%%=*}"
-    value="${kv#*=}"
-    if [[ "$value" == *[[:space:]]* ]]; then
-      pair="${key}='${value}'"
+  for field in "$@"; do
+    key="${field%%=*}"
+    value="${field#*=}"
+    if [[ "${value}" == *[[:space:]]* ]]; then
+      line+=" ${key}='${value}'"
     else
-      pair="${kv}"
-    fi
-    if [[ -z $suffix ]]; then
-      suffix="$pair"
-    else
-      suffix+=" $pair"
+      line+=" ${field}"
     fi
   done
 
-  if [[ -z $suffix ]]; then
-    printf '[past debug] event=%s\n' "$event" >&2
-  else
-    printf '[past debug] event=%s %s\n' "$event" "$suffix" >&2
-  fi
+  printf '%s\n' "${line}" >&2
 }
 
 #######################################
-# Check if a command exists.
+# Tell whether a command exists.
 #
 # Arguments:
-#   1: Command name.
+#   1: The name of the command.
 #
 # Returns:
-#   0: If exists.
-#   1: Otherwise.
+#   0 when it exists, 1 otherwise.
 #######################################
-function __ps_have_cmd() {
+function __ps_has_command() {
   command -v "$1" >/dev/null 2>&1
 }
 
-# endregion
+# endregion Internal helpers
 
 # region Backend detection
 
 #######################################
-# Detect the best available clipboard 'read' backend.
+# Find the clipboard backend to read with.
 #
-# When COPY_PAST_BACKEND is set, that backend is used
-# (and its absence is a hard error).
-# Otherwise we prefer Wayland's wl-paste
-# when a Wayland session is detected,
-# then fall back to xclip, then xsel.
+# COPY_PAST_BACKEND names the backend, and then that backend must exist;
+# an unknown name is a usage error, not a missing backend.
+# Otherwise a Wayland session takes wl-paste first;
+# then come xclip and xsel.
+# wl-paste runs without --no-newline,
+# which cuts the last line in wl-clipboard 2.2.1:
+# __ps_read_wl_paste removes the newline that wl-paste adds instead.
 #
 # Arguments:
-#   1: Name of the array variable (nameref) to store the command.
+#   1: The name of the array that takes the command.
+#
+# Globals:
+#   COPY_PAST_BACKEND, WAYLAND_DISPLAY, XDG_SESSION_TYPE: read.
 #
 # Returns:
-#   0: On success.
-#   PAST_ERR_NO_BACKEND: If no backend is available.
-#   PAST_ERR_USAGE: If COPY_PAST_BACKEND has an unknown value.
+#   0 on success, PAST_ERR_NO_BACKEND when no backend exists,
+#   PAST_ERR_USAGE when COPY_PAST_BACKEND names no backend.
 #######################################
 function __ps_detect_backend() {
-  local -n _backend_command="$1"
+  local -n _detected_command_ref=$1
 
-  # Step 1: honour an explicit override (env var).
-  #
-  # We deliberately omit --no-newline here,
-  # because wl-paste 2.2.1 has a known bug:
-  # it drops the last line
-  # when the clipboard content does not end with \n.
-  # Instead, we always run wl-paste in its default mode
-  # (which appends one \n)
-  # and cancel that trailing byte ourselves
-  # in __ps_read_wl_paste below.
-  case "${COPY_PAST_BACKEND-}" in
-    '') ;; # No override; fall through to auto-detection below.
-
+  case "${COPY_PAST_BACKEND:-}" in
+    '') ;;
     wl-clipboard | wayland | wl-paste)
-      if __ps_have_cmd wl-paste; then
-        _backend_command=(wl-paste)
+      if __ps_has_command wl-paste; then
+        _detected_command_ref=(wl-paste)
+
         return 0
       fi
-      return "$PAST_ERR_NO_BACKEND"
-      ;;
 
+      return "${PAST_ERR_NO_BACKEND}"
+      ;;
     xclip)
-      if __ps_have_cmd xclip; then
-        _backend_command=(xclip -selection clipboard -out)
+      if __ps_has_command xclip; then
+        _detected_command_ref=(xclip -selection clipboard -out)
+
         return 0
       fi
-      return "$PAST_ERR_NO_BACKEND"
-      ;;
 
+      return "${PAST_ERR_NO_BACKEND}"
+      ;;
     xsel)
-      if __ps_have_cmd xsel; then
-        _backend_command=(xsel --clipboard --output)
+      if __ps_has_command xsel; then
+        _detected_command_ref=(xsel --clipboard --output)
+
         return 0
       fi
-      return "$PAST_ERR_NO_BACKEND"
-      ;;
 
+      return "${PAST_ERR_NO_BACKEND}"
+      ;;
     *)
-      __ps_error \
-        "Unknown COPY_PAST_BACKEND value: '${COPY_PAST_BACKEND}' (use wl-clipboard, xclip, or xsel)" \
-        "$PAST_ERR_USAGE" \
-        || return "$?"
+      __ps_fail "${PAST_ERR_USAGE}" \
+        "unknown COPY_PAST_BACKEND value: '${COPY_PAST_BACKEND}'" \
+        'set it to wl-clipboard, xclip or xsel, or unset it' \
+        || return
       ;;
   esac
 
-  # Step 2: auto-detection.
-  if { [[ -n ${WAYLAND_DISPLAY-} ]] \
-    || [[ ${XDG_SESSION_TYPE-} == 'wayland' ]]; } \
-    && __ps_have_cmd wl-paste; then
-    _backend_command=(wl-paste)
+  if [[ -n "${WAYLAND_DISPLAY:-}" || "${XDG_SESSION_TYPE:-}" == 'wayland' ]] \
+    && __ps_has_command wl-paste; then
+    _detected_command_ref=(wl-paste)
+
     return 0
   fi
 
-  if __ps_have_cmd xclip; then
-    _backend_command=(xclip -selection clipboard -out)
+  if __ps_has_command xclip; then
+    _detected_command_ref=(xclip -selection clipboard -out)
+
     return 0
   fi
 
-  if __ps_have_cmd xsel; then
-    _backend_command=(xsel --clipboard --output)
+  if __ps_has_command xsel; then
+    _detected_command_ref=(xsel --clipboard --output)
+
     return 0
   fi
 
-  return "$PAST_ERR_NO_BACKEND"
+  return "${PAST_ERR_NO_BACKEND}"
 }
 
 #######################################
-# Append the backend-specific MIME-type flag
-# to a backend command array.
-#
-# Each backend uses a different flag for selecting MIME on read:
-#   - wl-paste:  --type MIME
-#   - xclip:     -t MIME
-#   - xsel:      unsupported (text/plain only)
+# Add the MIME type to a backend command, as the backend spells it:
+# wl-paste takes --type MIME, xclip takes -t MIME, and xsel takes none.
 #
 # Arguments:
-#   1: Name of the backend command array (nameref).
-#   2: MIME type string (e.g. 'application/json').
+#   1: The name of the backend command array.
+#   2: The MIME type, such as application/json.
 #
 # Returns:
-#   0: On success.
-#   PAST_ERR_TYPE_MISMATCH: If the backend does not support MIME types.
+#   0 on success, PAST_ERR_TYPE_MISMATCH when the backend takes no MIME type.
 #######################################
 function __ps_apply_mime() {
-  local -n _cmd="$1"
-  local -r mime="$2"
+  local -n _typed_command_ref=$1
+  local -r mime_type="$2"
 
-  case "${_cmd[0]}" in
-    wl-paste)
-      _cmd+=(--type "$mime")
-      return 0
-      ;;
-    xclip)
-      _cmd+=(-t "$mime")
-      return 0
-      ;;
+  case "${_typed_command_ref[0]}" in
+    wl-paste) _typed_command_ref+=(--type "${mime_type}") ;;
+    xclip) _typed_command_ref+=(-t "${mime_type}") ;;
     xsel)
-      __ps_error \
-        "xsel does not support MIME types; use wl-clipboard or xclip for '${mime}'" \
-        "$PAST_ERR_TYPE_MISMATCH" \
-        || return "$?"
+      __ps_fail "${PAST_ERR_TYPE_MISMATCH}" \
+        "xsel does not support MIME types such as '${mime_type}'" \
+        'use wl-clipboard or xclip for them; COPY_PAST_BACKEND picks the backend' \
+        || return
       ;;
     *)
-      __ps_error \
-        "Internal error: unknown backend '${_cmd[0]}' for MIME type" \
-        "$PAST_ERR_GENERAL" \
-        || return "$?"
+      __ps_fail "${PAST_ERR_INTERNAL}" \
+        "internal error: no MIME option for the backend '${_typed_command_ref[0]}'" \
+        'please report this bug' \
+        || return
       ;;
   esac
 }
 
-# endregion
+# endregion Backend detection
 
 # region wl-paste reader
 
 #######################################
-# Read clipboard via wl-paste,
-# then strip the trailing newline that wl-paste appends.
-# Preserves any newlines that were genuinely part of the clipboard content.
+# Print the clipboard through wl-paste, without the newline it adds.
 #
-# Implementation note:
-#   Command substitution $(...) strips trailing newlines,
-#   so we use a sentinel character ('x')
-#   and capture the exit code of wl-paste itself
-#   (NOT the trailing printf, which would mask failures).
-#
-#   This trick is text-only: capturing binary payloads through $()
-#   would corrupt embedded NUL bytes,
-#   so callers that target binary MIME types
-#   bypass this helper entirely.
+# $(...) drops every trailing newline, so x and the status of wl-paste
+# follow the output; the status after the last x tells a failure,
+# and the text before it keeps its own newlines.
+# A variable cannot hold NUL bytes, so this works for text only:
+# a binary MIME type never comes here.
 #
 # Arguments:
-#   1..N: backend command and its arguments (typically 'wl-paste').
+#   $@: The backend command, wl-paste and its options.
+#
+# Outputs:
+#   The text of the clipboard, to stdout.
 #
 # Returns:
-#   0: On success; clipboard content written to stdout.
-#   PAST_ERR_BACKEND_FAILED: If wl-paste returns non-zero.
+#   0 on success, PAST_ERR_BACKEND_FAILED when wl-paste fails.
 #######################################
 function __ps_read_wl_paste() {
-  local raw exit_code
+  local captured status_text
+  local -i backend_status=0
 
-  # Run wl-paste, append a sentinel byte,
-  # then read its true exit status from a temp variable
-  # so $() does not lose it.
-  raw="$(
-    "$@"
-    printf 'x%d' "$?"
+  captured="$(
+    command "$@" || backend_status=$?
+    printf 'x%d' "${backend_status}"
   )"
+  status_text="${captured##*x}"
+  captured="${captured%x*}"
 
-  # Recover the wl-paste exit code:
-  # everything after the LAST 'x' in the captured output is the rc,
-  # and everything before that 'x' is the real clipboard payload.
-  exit_code="${raw##*x}"
-  raw="${raw%x*}"
-
-  if [[ -z $exit_code || $exit_code -ne 0 ]]; then
-    return "$PAST_ERR_BACKEND_FAILED"
+  if [[ ! "${status_text}" =~ ^[0-9]+$ ]] || ((status_text != 0)); then
+    return "${PAST_ERR_BACKEND_FAILED}"
   fi
 
-  # wl-paste (without --no-newline) ALWAYS appends one \n to the
-  # output. Strip that one byte; any newlines that were genuinely
-  # part of the clipboard content remain untouched.
-  raw="${raw%$'\n'}"
-  printf '%s' "$raw"
+  # Plain wl-paste always adds one newline: remove that one only.
+  printf '%s' "${captured%$'\n'}"
 }
 
-# endregion
+# endregion wl-paste reader
 
 # region Option model
 
 #######################################
-# Initialize the past option struct to its defaults.
+# Set the options of past to their defaults.
 #
-# State is kept on the caller's stack (no globals)
-# and threaded into helpers via Bash namerefs.
-# Each `past` invocation therefore starts from a clean slate,
-# even when the script is sourced into a long-lived shell.
+# The options live in a map of the caller, so each call of past
+# starts clean, even in a shell that sourced the file long ago.
 #
 # Arguments:
-#   1: nameref to mime_type      (string, '' default).
-#   2: nameref to is_binary_mime (int,    0 default).
-#   3: nameref to debug_mode     (int,    0 default).
+#   1: The name of the map that takes the options:
+#      is_debug and should_show_help, each 0 or 1, and mime_type.
 #######################################
 function __ps_init_options() {
-  local -n _mime_type="$1"
-  local -n _is_binary_mime="$2"
-  local -n _debug_mode="$3"
+  local -n _default_options_ref=$1
 
-  _mime_type=''
-  _is_binary_mime=0
-  _debug_mode=0
+  _default_options_ref=(
+    ['mime_type']=''
+    ['is_debug']=0
+    ['should_show_help']=0
+  )
 }
 
 #######################################
-# Map a bare image format identifier (e.g. 'jpg', 'svg', 'webp')
-# to a canonical IANA `image/<...>` MIME type.
-#
-# Mirrors __cp_image_format_to_mime in copy.sh
-# so the two halves of a round-trip stay perfectly in sync.
+# Turn an image format, such as jpg or svg, into its MIME type,
+# as __cp_image_format_to_mime in copy.sh does,
+# so both halves of a round trip agree.
 #
 # Arguments:
-#   1: nameref to the destination string variable.
-#   2: format identifier string (already validated as non-empty).
+#   1: The name of the variable that takes the MIME type.
+#   2: The format; it is not empty.
 #######################################
 function __ps_image_format_to_mime() {
-  # Use a private nameref name distinct from any caller variable,
-  # so we never end up with a self-referencing nameref
-  # (which Bash silently downgrades to a plain string).
-  local -n _mime_dst="$1"
-  local -r format="$2"
+  local -n _mime_type_ref=$1
+  local -r image_format="$2"
 
-  case "$format" in
-    jpg | jpeg) _mime_dst='image/jpeg' ;;
-    png | webp | gif | bmp | tiff)
-      _mime_dst="image/${format}"
-      ;;
-    svg) _mime_dst='image/svg+xml' ;;
-    *) _mime_dst="image/${format}" ;;
+  case "${image_format}" in
+    jpg | jpeg) _mime_type_ref='image/jpeg' ;;
+    svg) _mime_type_ref='image/svg+xml' ;;
+    *) _mime_type_ref="image/${image_format}" ;;
   esac
 }
 
-# endregion
+# endregion Option model
 
 # region Argument parsing
 
 #######################################
-# Parse the value of a `--type[=]MIME` flag.
-#
-# Supports both `--type MIME` and `--type=MIME` forms.
-# Empty values are rejected with PAST_ERR_USAGE.
+# Read the MIME type of --type MIME or --type=MIME.
 #
 # Arguments:
-#   1:    nameref to mime_type slot.
-#   2:    nameref to consumed-arg counter.
-#   3..N: remaining argv (only $3 and $4 are inspected).
+#   1: The name of the options map.
+#   2: The name of the variable that takes how many arguments the flag used.
+#   3: The flag.
+#   4: The argument after the flag, if there is one.
 #
 # Returns:
-#   0: on success.
-#   PAST_ERR_USAGE: when the value is missing or empty.
+#   0 on success, PAST_ERR_USAGE when the MIME type is missing or empty.
 #######################################
 function __ps_parse_type_flag() {
-  local -n _mime_out="$1"
-  local -n _consumed="$2"
+  local -n _type_options_ref=$1
+  local -n _used_count_ref=$2
   local -r flag="$3"
+  local mime_type
 
-  if [[ "$flag" == --type=* ]]; then
-    _mime_out="${flag#*=}"
-    _consumed=1
+  if [[ "${flag}" == --type=* ]]; then
+    mime_type="${flag#*=}"
+    _used_count_ref=1
   else
-    if [[ -z ${4-} ]]; then
-      __ps_error '--type requires a MIME argument' \
-        "$PAST_ERR_USAGE" \
-        || return "$?"
-    fi
-    _mime_out="$4"
-    _consumed=2
+    mime_type="${4:-}"
+    _used_count_ref=2
   fi
 
-  if [[ -z $_mime_out ]]; then
-    __ps_error '--type requires a MIME argument' \
-      "$PAST_ERR_USAGE" \
-      || return "$?"
+  if [[ -z "${mime_type}" ]]; then
+    __ps_fail "${PAST_ERR_USAGE}" '--type requires a MIME type, such as text/html' \
+      'see: past --help' || return
   fi
+
+  _type_options_ref['mime_type']="${mime_type}"
 }
 
 #######################################
-# Parse the value of an `--image[=FORMAT]` flag.
-#
-# `--image` alone is treated as `--image=png`.
+# Read the format of --image or --image=FORMAT; png when none is given.
 #
 # Arguments:
-#   1: nameref to mime_type slot.
-#   2: nameref to consumed-arg counter.
-#   3: the original flag (`--image` or `--image=FOO`).
+#   1: The name of the options map.
+#   2: The flag.
 #
 # Returns:
-#   0: on success.
-#   PAST_ERR_USAGE: when an empty format is supplied.
+#   0 on success, PAST_ERR_USAGE when the format is empty.
 #######################################
 function __ps_parse_image_flag() {
-  local -n _mime_out="$1"
-  local -n _consumed="$2"
-  local -r flag="$3"
+  local -n _image_options_ref=$1
+  local -r flag="$2"
+  local image_format='png' image_mime_type=''
 
-  if [[ "$flag" == '--image' ]]; then
-    _mime_out='image/png'
-  else
-    local -r format="${flag#*=}"
-    if [[ -z $format ]]; then
-      __ps_error '--image=FORMAT requires a non-empty format' \
-        "$PAST_ERR_USAGE" \
-        || return "$?"
-    fi
-    __ps_image_format_to_mime _mime_out "$format"
+  if [[ "${flag}" == --image=* ]]; then
+    image_format="${flag#*=}"
   fi
 
-  _consumed=1
+  if [[ -z "${image_format}" ]]; then
+    __ps_fail "${PAST_ERR_USAGE}" '--image=FORMAT requires a format, such as png' \
+      'see: past --help' || return
+  fi
+
+  __ps_image_format_to_mime image_mime_type "${image_format}"
+  _image_options_ref['mime_type']="${image_mime_type}"
 }
 
 #######################################
-# Parse the full argv into the option struct.
+# Read the options of past from its command line.
 #
-# Past has a small surface area:
-#   -h / --help        : print usage and exit 0
-#        --type MIME   : explicit MIME type
-#   -j / --json        : sugar for --type application/json
-#        --image[=FMT] : sugar for --type image/<fmt>
-#   -d / --debug       : turn on the structured stderr log
-#        --verbose     : alias for --debug
-#
-# Any leftover positional arguments are rejected with PAST_ERR_USAGE,
-# because past has no notion of positional input.
+# past takes no text, so any word that is no option is a usage error.
+# --help ends the parsing at once.
 #
 # Arguments:
-#   1:    nameref to mime_type  (string).
-#   2:    nameref to debug_mode (int).
-#   3..N: the original argv to parse.
+#   1: The name of the options map.
+#   2...: The command line.
 #
 # Returns:
-#   0:               parsing succeeded.
-#   200:             --help was consumed; caller should exit 0.
-#   PAST_ERR_USAGE:  on unknown flags or stray positional args.
+#   0 on success, PAST_ERR_USAGE on an unknown argument or a bad value.
 #######################################
-function __ps_parse_args() {
-  local -n _mime="$1"
-  local -n _debug="$2"
-  shift 2
+function __ps_parse_arguments() {
+  local -n _parsed_options_ref=$1
+  local -r options_name="$1"
+  local -i used_count=0
+  shift
 
-  local -i consumed=0
-
-  while [[ $# -gt 0 ]]; do
+  while (($# > 0)); do
     case "$1" in
       -h | --help)
-        __ps_usage
-        return 200
+        _parsed_options_ref['should_show_help']=1
+
+        return 0
         ;;
       --type | --type=*)
-        __ps_parse_type_flag _mime consumed "$@" || return "$?"
-        shift "$consumed"
+        __ps_parse_type_flag "${options_name}" used_count "$@" || return
+        shift "$((used_count - 1))"
         ;;
-      --json | -j)
-        _mime='application/json'
-        shift
-        ;;
+      --json | -j) _parsed_options_ref['mime_type']='application/json' ;;
       --image | --image=*)
-        __ps_parse_image_flag _mime consumed "$1" || return "$?"
-        shift "$consumed"
+        __ps_parse_image_flag "${options_name}" "$1" || return
         ;;
-      -d | --debug | --verbose)
-        _debug=1
-        shift
-        ;;
+      -d | --debug | --verbose) _parsed_options_ref['is_debug']=1 ;;
       *)
-        __ps_error "Unknown argument: $1" "$PAST_ERR_USAGE" \
-          || return "$?"
+        __ps_fail "${PAST_ERR_USAGE}" "unknown argument: $1" 'see: past --help' \
+          || return
         ;;
     esac
+    shift
   done
 }
 
 #######################################
-# Classify a MIME string as binary or text-ish.
+# Tell whether a MIME type is binary: image/* or application/octet-stream.
 #
-# Binary MIMEs (image/*, application/octet-stream)
-# bypass the wl-paste trailing-newline workaround,
-# because that workaround is text-only:
-# stripping a trailing 0x0A byte from a PNG would corrupt it.
-# JSON and text/* are treated as text-ish.
+# A binary payload skips the newline fix of wl-paste,
+# since removing a last 0x0A byte would break a PNG.
+# Everything else, JSON and text/* too, counts as text.
 #
 # Arguments:
-#   1: nameref to a 0/1 sink (set to 1 for binary, 0 for text).
-#   2: MIME type string (may be empty).
+#   1: The MIME type; it may be empty.
+#
+# Returns:
+#   0 when the type is binary, 1 otherwise.
 #######################################
-function __ps_classify_mime() {
-  local -n _is_binary="$1"
-  local -r mime="$2"
-
-  case "$mime" in
-    image/* | application/octet-stream) _is_binary=1 ;;
-    *) _is_binary=0 ;;
+function __ps_is_binary_mime() {
+  case "$1" in
+    image/* | application/octet-stream) return 0 ;;
+    *) return 1 ;;
   esac
 }
 
-# endregion
+# endregion Argument parsing
 
 # region Backend wiring
 
 #######################################
-# Resolve the clipboard backend command and apply an explicit MIME.
-#
-# Wraps __ps_detect_backend + __ps_apply_mime
-# so the orchestrator stays free of duplicated rc-handling.
+# Find the backend command, and add the MIME type that the user gave.
 #
 # Arguments:
-#   1: nameref to a string array that receives the backend argv.
-#   2: explicit MIME type (may be empty; skips __ps_apply_mime).
+#   1: The name of the array that takes the backend command.
+#   2: The MIME type of the user; empty for none.
 #
 # Returns:
-#   0: on success.
-#   PAST_ERR_USAGE: on unknown COPY_PAST_BACKEND override.
-#   PAST_ERR_NO_BACKEND: when no backend is installed.
-#   PAST_ERR_TYPE_MISMATCH: when the MIME flag is incompatible
-#                           with the chosen backend (e.g., xsel).
+#   0 on success, PAST_ERR_USAGE on an unknown COPY_PAST_BACKEND,
+#   PAST_ERR_NO_BACKEND when no backend is installed,
+#   PAST_ERR_TYPE_MISMATCH when the backend takes no MIME type.
 #######################################
 function __ps_resolve_backend() {
-  local -n _backend="$1"
-  local -r mime="$2"
+  local -r mime_type="$2"
+  local -i detect_status=0
 
-  local -i detect_rc=0
-  __ps_detect_backend _backend || detect_rc=$?
+  __ps_detect_backend "$1" || detect_status=$?
 
-  if ((detect_rc != 0)); then
-    if ((detect_rc == PAST_ERR_USAGE)); then
-      # __ps_detect_backend already emitted its own message.
-      return "$detect_rc"
-    fi
-
-    local error_msg='No clipboard backend found. '
-    error_msg+='Install wl-clipboard, xclip, or xsel.'
-    __ps_error "$error_msg" \
-      "$PAST_ERR_NO_BACKEND" \
-      || return "$?"
+  # __ps_detect_backend has already reported an unknown backend.
+  if ((detect_status == PAST_ERR_USAGE)); then
+    return "${detect_status}"
+  fi
+  if ((detect_status != 0)); then
+    __ps_fail "${PAST_ERR_NO_BACKEND}" 'no clipboard backend found' \
+      'install wl-clipboard, xclip or xsel' \
+      || return
   fi
 
-  if [[ -n $mime ]]; then
-    __ps_apply_mime _backend "$mime" || return "$?"
+  if [[ -n "${mime_type}" ]]; then
+    __ps_apply_mime "$1" "${mime_type}" || return
   fi
 }
 
-# endregion
+# endregion Backend wiring
 
 # region Read pipeline
 
 #######################################
-# Stream the clipboard content to stdout.
+# Print the clipboard to stdout.
 #
-# Routing rules:
-#   - wl-paste, text MIME: go through __ps_read_wl_paste
-#                          to undo the trailing-newline quirk.
-#   - wl-paste, binary MIME: invoke directly,
-#                            because the sentinel-and-strip trick
-#                            would corrupt embedded NULs.
-#   - xclip / xsel: invoke directly in either case,
-#                   they emit clipboard bytes verbatim.
+# wl-paste with a text MIME type goes through __ps_read_wl_paste,
+# to remove the newline that wl-paste adds.
+# wl-paste with a binary MIME type runs as it is,
+# since that fix would lose the NUL bytes;
+# xclip and xsel print the clipboard as it is anyway.
 #
 # Arguments:
-#   1: is_binary_mime flag (int).
-#   2: nameref to the backend command array.
+#   1: 1 when the MIME type is binary, 0 otherwise.
+#   2...: The backend command.
+#
+# Outputs:
+#   The clipboard, to stdout.
 #
 # Returns:
-#   0: on success.
-#   PAST_ERR_BACKEND_FAILED: when the backend exits non-zero.
+#   0 on success, PAST_ERR_BACKEND_FAILED when the backend fails.
 #######################################
-function __ps_emit_clipboard() {
-  local -ir is_binary_mime=$1
-  local -n _backend="$2"
+function __ps_print_clipboard() {
+  local -ir is_binary_mime="$1"
+  shift
 
-  if [[ ${_backend[0]} == 'wl-paste' && $is_binary_mime -eq 0 ]]; then
-    if ! __ps_read_wl_paste "${_backend[@]}"; then
-      __ps_error 'Clipboard backend failed to read.' \
-        "$PAST_ERR_BACKEND_FAILED" \
-        || return "$?"
+  if [[ "$1" == 'wl-paste' ]] && ((! is_binary_mime)); then
+    if ! __ps_read_wl_paste "$@"; then
+      __ps_fail "${PAST_ERR_BACKEND_FAILED}" 'the clipboard backend failed to read' \
+        'see its message above; COPY_PAST_BACKEND picks another backend' \
+        || return
     fi
+
     return 0
   fi
 
-  if ! "${_backend[@]}"; then
-    __ps_error 'Clipboard backend failed to read.' \
-      "$PAST_ERR_BACKEND_FAILED" \
-      || return "$?"
+  if ! command "$@"; then
+    __ps_fail "${PAST_ERR_BACKEND_FAILED}" 'the clipboard backend failed to read' \
+      'see its message above; COPY_PAST_BACKEND picks another backend' \
+      || return
   fi
 }
 
-# endregion
+# endregion Read pipeline
 
 # region Public API
 
 #######################################
-# Main function to read from clipboard.
+# Print the clipboard.
 #
-# Thin orchestrator: every step lives in its own helper above,
-# so this body reads as a sequence of named phases.
-# State is kept on the local stack and threaded through helpers
-# via Bash namerefs (parameters whose names start with `_`).
-# No global state is used; each invocation gets a fresh slate.
+# Each step lives in a helper, so the body reads as a list of steps.
+# The state lives in this function and goes to the helpers by name,
+# so each call starts clean, even in a shell that sourced the file.
 #
 # Arguments:
-#   [-h | --help]
-#   [--type MIME | --json | --image[=FORMAT]]
+#   $@: The options; see __ps_usage.
+#
+# Outputs:
+#   The clipboard, to stdout.
 #
 # Returns:
-#   0: on success.
-#   Non-zero: on error (see header for code list).
+#   0 on success, or an exit code from the header.
 #######################################
 function past() {
-  # Phase 1: option struct.
-  local mime_type
-  local -i is_binary_mime debug_mode
-  __ps_init_options mime_type is_binary_mime debug_mode
+  local -A options=()
+  local -a backend_command=()
+  local -i is_binary_mime=0
 
-  # Phase 2: parse argv.
-  local -i parse_rc=0
-  __ps_parse_args mime_type debug_mode "$@" || parse_rc=$?
+  __ps_init_options options
+  __ps_parse_arguments options "$@" || return
+  if ((options['should_show_help'])); then
+    __ps_usage
 
-  if ((parse_rc == 200)); then
-    # --help was consumed; usage already printed.
     return 0
   fi
-  if ((parse_rc != 0)); then
-    return "$parse_rc"
+
+  __ps_debug "${options['is_debug']}" 'options-parsed' \
+    "mime=${options['mime_type']:-<none>}"
+
+  # The read step needs to know whether to fix the newline of wl-paste.
+  if __ps_is_binary_mime "${options['mime_type']}"; then
+    is_binary_mime=1
   fi
-
-  __ps_debug "$debug_mode" 'options-parsed' \
-    "mime=${mime_type:-<none>}"
-
-  # Phase 3: classify the requested MIME
-  # so the read step knows
-  # whether to apply the trailing-newline workaround.
-  __ps_classify_mime is_binary_mime "$mime_type"
-
-  __ps_debug "$debug_mode" 'mime-classified' \
+  __ps_debug "${options['is_debug']}" 'mime-classified' \
     "is-binary=${is_binary_mime}"
 
-  # Phase 4: backend resolution (+ explicit --type application).
-  # shellcheck disable=SC2034 # passed by name (nameref) into helpers
-  local -a backend_cmd
-  __ps_resolve_backend backend_cmd "$mime_type" || return "$?"
+  __ps_resolve_backend backend_command "${options['mime_type']}" || return
+  __ps_debug "${options['is_debug']}" 'backend-resolved' \
+    "backend=${backend_command[0]}"
 
-  __ps_debug "$debug_mode" 'backend-resolved' \
-    "backend=${backend_cmd[0]}"
-
-  # Phase 5: stream clipboard content to stdout.
-  if [[ ${backend_cmd[0]} == 'wl-paste' && $is_binary_mime -eq 0 ]]; then
-    __ps_debug "$debug_mode" 'read-strategy' \
+  if [[ "${backend_command[0]}" == 'wl-paste' ]] && ((! is_binary_mime)); then
+    __ps_debug "${options['is_debug']}" 'read-strategy' \
       'mode=wl-paste-newline-strip'
   else
-    __ps_debug "$debug_mode" 'read-strategy' \
-      'mode=direct-exec'
+    __ps_debug "${options['is_debug']}" 'read-strategy' 'mode=direct-exec'
   fi
 
-  __ps_emit_clipboard "$is_binary_mime" backend_cmd
+  __ps_print_clipboard "${is_binary_mime}" "${backend_command[@]}"
 }
 
-# endregion
+# endregion Public API
 
 # region Execution guard
 
-# When the file is executed directly (not sourced),
-# run the main function and propagate its exit code.
-# If sourced, do nothing (expose past() as a function).
-if [[ ${BASH_SOURCE[0]} == "$0" ]]; then
-  past "$@"
-  exit "$?"
-fi
-# endregion
+# Sourced, the file only defines the function past;
+# run as a program, it runs past in strict mode.
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  set -o errexit -o nounset -o pipefail -o errtrace
+  shopt -s inherit_errexit
+  trap '__ps_internal_error "$?" "${LINENO}" "${BASH_COMMAND}"' ERR
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
 
-### End of file
+  past "$@"
+fi
+
+# endregion Execution guard
+
+### End

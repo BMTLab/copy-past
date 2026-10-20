@@ -1,84 +1,95 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
-# Name: tests/support/debug_log.bash
-# Author: Nikita Neverov (BMTLab)
-# License: MIT
+# Check the events of the debug log that copy and past print with --debug.
 #
-# Description:
-#   Assertions over the structured `--debug` log emitted by
-#   copy.sh and past.sh.
-#
-#   Each line follows the contract:
-#     [copy debug] event=<name> key=value key='quoted value'
-#   (or [past debug] for past).
-#
-#   Tests use these helpers instead of inline `grep` so the matchers
-#   stay future-proof: extra fields can be added to a log line
-#   without breaking older assertions, as long as the helpers only
-#   require the expected substrings to be present.
-#
-#   Loaded by tests/support/test_helper.bash.
+# A line of the log reads: [copy debug] event=NAME key=value key='a value',
+# or [past debug] for past. The checks only need the fields they name,
+# so a new field on a line breaks no test.
 
 #######################################
-# Assert that a captured stderr blob contains a debug log line
-# matching the given event name and (optionally) all the supplied
-# key=value substrings.
-#
-# Globals consumed:
-#   $stderr: the buffer captured by `run --separate-stderr`.
+# Find the first line of the debug log with an event.
 #
 # Arguments:
-#   1:    expected event name (e.g. 'auto-detect').
-#   2..N: optional key=value substrings that must appear on the line.
-#
-# Usage:
-#   run --separate-stderr ...
-#   __cp_assert_debug_event 'auto-detect' 'mime=application/json'
+#   1: The name of the variable that takes the line; empty when none.
+#   2: The name of the event, such as auto-detect.
+#   3: The log, as run --separate-stderr keeps it.
 #######################################
-__cp_assert_debug_event() {
+function find_debug_event() {
+  local -n _event_line_ref=$1
+  local -r event="$2"
+  local -r log="$3"
+  local line
+
+  _event_line_ref=''
+  while IFS= read -r line; do
+    if [[ "${line}" =~ ^\[(copy|past)\ debug\]\ event=([^ ]+) ]] \
+      && [[ "${BASH_REMATCH[2]}" == "${event}" ]]; then
+      _event_line_ref="${line}"
+
+      return 0
+    fi
+  done <<<"${log}"
+}
+
+#######################################
+# Check that the debug log holds an event with all the fields given.
+#
+# Arguments:
+#   1: The name of the event, such as auto-detect.
+#   2...: The fields the line must hold, such as mime=application/json.
+#
+# Globals:
+#   stderr: read; run --separate-stderr sets it.
+#
+# Returns:
+#   0 when the event and its fields are there, 1 otherwise.
+#######################################
+function assert_debug_event() {
   local -r event="$1"
+  local event_line field
   shift
 
-  local line
-  # Find the first '[copy debug] event=<event>' or '[past debug] event=<event>'
-  # line in the captured stderr.
-  line="$(grep -E "^\[(copy|past) debug\] event=${event}( |$)" \
-    <<< "$stderr" | head -n1)"
-  if [[ -z $line ]]; then
-    printf 'Expected debug event %q not found.\n' "$event" >&2
-    printf 'Captured stderr:\n%s\n' "$stderr" >&2
+  find_debug_event event_line "${event}" "${stderr}"
+  if [[ -z "${event_line}" ]]; then
+    printf 'Expected debug event %q not found.\n' "${event}" >&2
+    printf 'Captured stderr:\n%s\n' "${stderr}" >&2
+
     return 1
   fi
 
-  local kv
-  for kv in "$@"; do
-    if [[ "$line" != *"$kv"* ]]; then
-      printf 'Event %q is missing %q.\n' "$event" "$kv" >&2
-      printf 'Matched line: %s\n' "$line" >&2
+  for field in "$@"; do
+    if [[ "${event_line}" != *"${field}"* ]]; then
+      printf 'Event %q is missing %q.\n' "${event}" "${field}" >&2
+      printf 'Matched line: %s\n' "${event_line}" >&2
+
       return 1
     fi
   done
 }
 
 #######################################
-# Assert that a captured stderr blob does NOT contain any debug log
-# line matching the given event name.
-#
-# Globals consumed:
-#   $stderr: the buffer captured by `run --separate-stderr`.
+# Check that the debug log holds no line with an event.
 #
 # Arguments:
-#   1: event name that must NOT appear.
+#   1: The name of the event.
+#
+# Globals:
+#   stderr: read; run --separate-stderr sets it.
+#
+# Returns:
+#   0 when the event is not there, 1 otherwise.
 #######################################
-__cp_refute_debug_event() {
+function refute_debug_event() {
   local -r event="$1"
+  local event_line
 
-  if grep -qE "^\[(copy|past) debug\] event=${event}( |$)" \
-    <<< "$stderr"; then
-    printf 'Unexpected debug event %q found.\n' "$event" >&2
-    printf 'Captured stderr:\n%s\n' "$stderr" >&2
+  find_debug_event event_line "${event}" "${stderr}"
+  if [[ -n "${event_line}" ]]; then
+    printf 'Unexpected debug event %q found.\n' "${event}" >&2
+    printf 'Captured stderr:\n%s\n' "${stderr}" >&2
+
     return 1
   fi
 }
 
-### End of file
+### End

@@ -1,349 +1,303 @@
 #!/usr/bin/env bats
 
-# Name: tests/integration/test_features.bats
-# Author: Nikita Neverov (BMTLab)
-# License: MIT
-#
-# Description:
-#   Behavioural integration tests for the v1.3.0+ feature surface:
-#     - --append / -a       (text concatenation onto existing buffer)
-#     - --trim              (whitespace trimming before write)
-#     - --type MIME         (universal MIME-type forwarding)
-#     - --json / -j         (sugar for --type application/json --raw)
-#     - --image[=FORMAT]    (sugar for --type image/<format> --raw)
-#     - --no-auto           (disable the always-on heuristic)
-#
-#   Each test exercises one end-to-end behaviour
-#   that cannot be expressed at the unit-test level
-#   (clipboard side effects, prelude composition,
-#   cross-flag compatibility errors, real backend dispatch).
-#
-#   MIME-routing assertions reach into the structured debug log
-#   instead of grepping wl-copy's argv:
-#   the `--debug` flag is contractually stable
-#   and gives us a much cleaner narrative for what the script chose.
-#
-#   Pure flag mappings (e.g. --image=jpg -> image/jpeg)
-#   live in tests/unit/test_options.bats and tests/unit/test_mime.bats:
-#   they exercise the same code path
-#   without involving a fake-backend round-trip.
-#
-#   Each test follows the Arrange-Act-Assert (AAA) pattern.
-#
-# Disclaimer:
-#   This script is provided 'as is', without any warranty.
+# Tests the options of copy and past end to end: append, trim, MIME types, images.
 
-bats_require_minimum_version 1.5.0
+bats_require_minimum_version 1.11.0
 
 load '../support/test_helper.bash'
 
-setup() {
-  __cp_setup_fake_backend
-  __cp_load_scripts
+function setup() {
+  setup_fake_backends
+  load_scripts
 }
-
 
 # region --append
 
-@test "--append concatenates new text onto existing clipboard content" {
+@test "copy --append adds the new text after the clipboard" {
   # Arrange
-  __cp_clipboard_set 'first '
+  set_clipboard 'first '
 
   # Act
-  run --separate-stderr __cp_run 'printf "%s" "second" | copy --append'
+  run --separate-stderr run_snippet 'printf "%s" "second" | copy --append'
 
   # Assert
-  [ "$status" -eq 0 ]
-  [ "$(__cp_clipboard_dump)" = 'first second' ]
+  ((status == 0))
+  [[ "$(print_clipboard)" == 'first second' ]]
 }
 
-@test "--append on empty clipboard behaves like a plain write" {
+@test "copy --append on an empty clipboard writes the new text alone" {
   # Arrange
-  __cp_clipboard_set ''
+  set_clipboard ''
 
   # Act
-  run --separate-stderr __cp_run 'printf "%s" "fresh" | copy --append'
+  run --separate-stderr run_snippet 'printf "%s" "fresh" | copy --append'
 
   # Assert
-  [ "$status" -eq 0 ]
-  [ "$(__cp_clipboard_dump)" = 'fresh' ]
+  ((status == 0))
+  [[ "$(print_clipboard)" == 'fresh' ]]
 }
 
-@test "--append works in argument mode (no piped stdin)" {
+@test "copy --append works in argument mode" {
   # Arrange
-  __cp_clipboard_set 'hello '
+  set_clipboard 'hello '
 
   # Act
-  run --separate-stderr __cp_run_copy_argv '--append world'
+  run --separate-stderr run_copy_in_terminal '--append world'
 
   # Assert
-  [ "$status" -eq 0 ]
-  [ "$(__cp_clipboard_dump)" = 'hello world' ]
+  ((status == 0))
+  [[ "$(print_clipboard)" == 'hello world' ]]
 }
 
-# endregion
-
+# endregion --append
 
 # region --trim
 
-@test "--trim removes leading and trailing whitespace, preserves the interior" {
-  # Arrange:
-  # whitespace surrounds the payload; tabs and newlines stay inside.
-  local -r expected=$'middle a b\tc\nd'
+@test "copy --trim removes the whitespace at both ends and keeps the inside" {
+  # Arrange: whitespace around the text; tabs and newlines inside it.
 
   # Act
-  run --separate-stderr __cp_run \
+  run --separate-stderr run_snippet \
     'printf "  \t\nmiddle a b\tc\nd  \n" | copy --trim'
 
   # Assert
-  [ "$status" -eq 0 ]
-  [ "$(__cp_clipboard_dump)" = "$expected" ]
+  ((status == 0))
+  [[ "$(print_clipboard)" == $'middle a b\tc\nd' ]]
 }
 
-@test "--trim composes correctly with default ANSI stripping" {
-  # Arrange:
-  # ANSI codes around the payload are stripped first,
-  # then the leftover whitespace is trimmed.
-  local -r expected='red'
+@test "copy --trim removes ANSI escape sequences first, then the whitespace" {
+  # Arrange: spaces around a colored word.
 
   # Act
-  run --separate-stderr __cp_run \
+  run --separate-stderr run_snippet \
     'printf "  \033[31mred\033[0m  " | copy --trim'
 
   # Assert
-  [ "$status" -eq 0 ]
-  [ "$(__cp_clipboard_dump)" = "$expected" ]
+  ((status == 0))
+  [[ "$(print_clipboard)" == 'red' ]]
 }
 
-@test "--trim composes with --raw (ANSI kept, whitespace gone)" {
-  # Arrange
-  local -r expected=$'\033[31mred\033[0m'
+@test "copy --trim --raw keeps ANSI escape sequences and removes the whitespace" {
+  # Arrange: spaces around a colored word.
 
   # Act
-  run --separate-stderr __cp_run \
+  run --separate-stderr run_snippet \
     'printf "  \033[31mred\033[0m  " | copy --trim --raw'
 
   # Assert
-  [ "$status" -eq 0 ]
-  [ "$(__cp_clipboard_dump)" = "$expected" ]
+  ((status == 0))
+  [[ "$(print_clipboard)" == $'\033[31mred\033[0m' ]]
 }
 
-# endregion
+# endregion --trim
 
-
-# region MIME forwarding (debug-driven)
+# region Explicit MIME types
 #
-# These tests assert the MIME chosen by copy/past via the structured
-# `--debug` log, rather than grepping the backend's argv.
-# Why: the debug log is the project's stable contract for what was
-# decided, while argv-grepping conflates 'how did the script call
-# wl-copy' with 'what MIME did it pick'.
+# The debug log tells which MIME type copy and past chose:
+# its format is a contract, while the argv of wl-copy is a detail.
 
-@test "explicit --type pins the MIME on copy" {
-  # Arrange
-  local -r payload='<html>hi</html>'
+@test "copy --type sets the MIME type and turns auto-detection off" {
+  # Arrange: HTML, which auto-detection would call text/plain.
 
   # Act
-  run --separate-stderr __cp_run \
-    "printf '%s' '${payload}' | copy --debug --type text/html"
+  run --separate-stderr run_snippet \
+    "printf '%s' '<html>hi</html>' | copy --debug --type text/html"
 
   # Assert
-  [ "$status" -eq 0 ]
-  [ "$(__cp_clipboard_dump)" = "$payload" ]
-  __cp_assert_debug_event 'options-parsed' 'mime=text/html'
-  # An explicit --type wins over auto-detection.
-  __cp_assert_debug_event 'options-validated' 'auto=0'
+  ((status == 0))
+  [[ "$(print_clipboard)" == '<html>hi</html>' ]]
+  assert_debug_event 'options-parsed' 'mime=text/html'
+  assert_debug_event 'options-validated' 'auto=0'
 }
 
-@test "--json pins application/json and skips ANSI stripping" {
+@test "copy --json sets application/json and keeps ANSI escape sequences" {
   # Arrange:
-  # ANSI escapes inside the payload would normally be stripped,
-  # but --json implies --raw, so they survive verbatim.
-  local -r payload=$'{"key":"\033[31mvalue\033[0m"}'
+  # the default filter would remove the escape sequences,
+  # but --json implies --raw.
 
   # Act
-  run --separate-stderr __cp_run \
-    'printf "%s" $'"'"'{"key":"\033[31mvalue\033[0m"}'"'"' \
-      | copy --debug --json'
+  run --separate-stderr run_snippet \
+    "printf '%b' '{\"key\":\"\\033[31mvalue\\033[0m\"}' | copy --debug --json"
 
   # Assert
-  [ "$status" -eq 0 ]
-  [ "$(__cp_clipboard_dump)" = "$payload" ]
-  __cp_assert_debug_event 'options-parsed' \
-    'mime=application/json' 'raw=1'
+  ((status == 0))
+  [[ "$(print_clipboard)" == $'{"key":"\033[31mvalue\033[0m"}' ]]
+  assert_debug_event 'options-parsed' 'mime=application/json' 'raw=1'
 }
 
-@test "past --type pins the MIME on read" {
+@test "past --type asks the backend for that MIME type" {
   # Arrange
-  __cp_clipboard_set 'binary-bytes'
+  set_clipboard 'binary-bytes'
 
   # Act
   run --separate-stderr past --debug --type image/png
 
   # Assert
-  [ "$status" -eq 0 ]
-  [ "$output" = 'binary-bytes' ]
-  __cp_assert_debug_event 'options-parsed' 'mime=image/png'
-  __cp_assert_debug_event 'mime-classified' 'is-binary=1'
+  ((status == 0))
+  [[ "${output}" == 'binary-bytes' ]]
+  assert_debug_event 'options-parsed' 'mime=image/png'
+  assert_debug_event 'mime-classified' 'is-binary=1'
 }
 
-# endregion
-
+# endregion Explicit MIME types
 
 # region Auto-detection
 
-@test "JSON is auto-detected by default when jq is available" {
+@test "copy detects JSON by default when jq is there" {
   # Arrange
   if ! command -v jq >/dev/null 2>&1; then
-    skip 'jq not installed; default JSON detection is opt-in via jq presence'
+    skip 'jq not installed; JSON detection needs it'
   fi
 
   # Act
-  run --separate-stderr __cp_run \
+  run --separate-stderr run_snippet \
     'printf "%s" "{\"hello\":\"world\"}" | copy --debug'
 
-  # Assert:
-  # the auto-detect helper picks application/json,
-  # the binary fast-path completes the write.
-  [ "$status" -eq 0 ]
-  [ "$(__cp_clipboard_dump)" = '{"hello":"world"}' ]
-  __cp_assert_debug_event 'auto-detect' 'mime=application/json'
-  __cp_assert_debug_event 'done' 'mode=auto-binary'
+  # Assert: the payload takes the way of a binary one, with its type.
+  ((status == 0))
+  [[ "$(print_clipboard)" == '{"hello":"world"}' ]]
+  assert_debug_event 'auto-detect' 'mime=application/json'
+  assert_debug_event 'done' 'mode=auto-binary'
 }
 
-@test "PNG bytes are auto-detected by default" {
-  # Arrange / Act
-  run --separate-stderr __cp_run \
+@test "copy detects PNG bytes by default" {
+  # Arrange: the PNG signature, then more bytes.
+
+  # Act
+  run --separate-stderr run_snippet \
     'printf "\x89PNG\r\n\x1a\nrest" | copy --debug'
 
   # Assert
-  [ "$status" -eq 0 ]
-  __cp_assert_debug_event 'auto-detect' 'mime=image/png'
-  __cp_assert_debug_event 'done' 'mode=auto-binary'
+  ((status == 0))
+  assert_debug_event 'auto-detect' 'mime=image/png'
+  assert_debug_event 'done' 'mode=auto-binary'
 }
 
-@test "--no-auto pins the payload to text/plain" {
+@test "copy --no-auto writes valid JSON as text/plain" {
   # Arrange
   if ! command -v jq >/dev/null 2>&1; then
-    skip 'jq not installed; --no-auto only matters when default sniff is active'
+    skip 'jq not installed; without it nothing is detected anyway'
   fi
 
-  # Act:
-  # the payload IS valid JSON, but --no-auto pins us to text/plain.
-  run --separate-stderr __cp_run \
+  # Act
+  run --separate-stderr run_snippet \
     'printf "%s" "{\"a\":1}" | copy --debug --no-auto'
 
-  # Assert:
-  # auto must be off, no auto-detect events should fire,
-  # and the payload reaches the clipboard verbatim.
-  [ "$status" -eq 0 ]
-  [ "$(__cp_clipboard_dump)" = '{"a":1}' ]
-  __cp_assert_debug_event 'options-parsed' 'auto=0'
-  __cp_refute_debug_event 'auto-detect-start'
+  # Assert
+  ((status == 0))
+  [[ "$(print_clipboard)" == '{"a":1}' ]]
+  assert_debug_event 'options-parsed' 'auto=0'
+  refute_debug_event 'auto-detect-start'
 }
 
-@test "explicit --type wins over auto-detection" {
+@test "copy --type wins over auto-detection" {
   # Arrange
   if ! command -v jq >/dev/null 2>&1; then
     skip 'jq not installed'
   fi
 
-  # Act:
-  # the payload looks like JSON, but the user pinned text/html.
-  run --separate-stderr __cp_run \
+  # Act: the payload looks like JSON, but the user says text/html.
+  run --separate-stderr run_snippet \
     'printf "%s" "{\"a\":1}" | copy --debug --type text/html'
 
   # Assert
-  [ "$status" -eq 0 ]
-  __cp_assert_debug_event 'options-parsed' 'mime=text/html'
-  __cp_refute_debug_event 'auto-detect'
+  ((status == 0))
+  assert_debug_event 'options-parsed' 'mime=text/html'
+  refute_debug_event 'auto-detect'
 }
 
-@test "auto-detection silently disabled with --append (text-only mode)" {
+@test "copy --append turns auto-detection off" {
   # Arrange:
-  # the existing clipboard content is text;
-  # the new payload looks like JSON.
-  # --append must suppress the heuristic
-  # so the prelude is never accidentally classified
-  # as part of a JSON document.
-  __cp_clipboard_set 'prefix '
+  # the clipboard holds text, and the new payload looks like JSON;
+  # the old text and the new one together are no JSON document.
+  set_clipboard 'prefix '
 
   # Act
-  run --separate-stderr __cp_run \
+  run --separate-stderr run_snippet \
     'printf "%s" "{\"a\":1}" | copy --debug --append'
 
   # Assert
-  [ "$status" -eq 0 ]
-  [ "$(__cp_clipboard_dump)" = 'prefix {"a":1}' ]
-  __cp_assert_debug_event 'options-validated' 'auto=0'
-  __cp_refute_debug_event 'auto-detect-start'
+  ((status == 0))
+  [[ "$(print_clipboard)" == 'prefix {"a":1}' ]]
+  assert_debug_event 'options-validated' 'auto=0'
+  refute_debug_event 'auto-detect-start'
 }
 
-# endregion
+@test "copy writes a text payload larger than a pipe buffer byte for byte" {
+  # Arrange:
+  # auto-detection reads only the start of the payload,
+  # and a pipe holds 64 KiB, so the payload is far larger.
+  local -r payload_path="${BATS_TEST_TMPDIR}/large.txt"
+  printf 'line %06d of a large payload\n' {1..10000} >"${payload_path}"
 
+  # Act
+  run --separate-stderr run_snippet "copy <${payload_path@Q}"
 
-# region --image (binary fidelity)
+  # Assert
+  ((status == 0))
+  cmp -- "${payload_path}" "${FAKE_CLIPBOARD_FILE}"
+}
 
-@test "--image preserves binary bytes verbatim and pins image/png" {
-  # Arrange / Act
-  run --separate-stderr __cp_run \
+# endregion Auto-detection
+
+# region Images
+
+@test "copy --image writes binary bytes as they are, as image/png" {
+  # Arrange: the 8 bytes of the PNG signature.
+
+  # Act
+  run --separate-stderr run_snippet \
     'printf "\x89PNG\r\n\x1a\n" | copy --debug --image'
 
   # Assert
-  [ "$status" -eq 0 ]
-  __cp_assert_debug_event 'options-parsed' \
-    'mime=image/png' 'raw=1'
-  # \x89 P N G \r \n \x1a \n  ->  89 50 4e 47 0d 0a 1a 0a
-  [ "$(__cp_clipboard_hex)" = '89504e470d0a1a0a' ]
+  ((status == 0))
+  assert_debug_event 'options-parsed' 'mime=image/png' 'raw=1'
+  [[ "$(print_clipboard_hex)" == '89504e470d0a1a0a' ]]
 }
 
-# endregion
-
-
-# region Cross-flag compatibility errors
-
-@test "--append with --image fails with COPY_ERR_TYPE_MISMATCH" {
-  # Arrange / Act
-  run --separate-stderr __cp_run 'printf "x" | copy --append --image'
-
-  # Assert
-  [ "$status" -eq "$COPY_ERR_TYPE_MISMATCH" ]
-  [[ "$stderr" == *'--append is only valid for text payloads'* ]]
-}
-
-@test "--trim with --image fails with COPY_ERR_TYPE_MISMATCH" {
-  # Arrange / Act
-  run --separate-stderr __cp_run 'printf "x" | copy --trim --image'
-
-  # Assert
-  [ "$status" -eq "$COPY_ERR_TYPE_MISMATCH" ]
-  [[ "$stderr" == *'--trim is only valid for text payloads'* ]]
-}
-
-# endregion
-
-
-# region past --image (NUL fidelity)
-
-@test "past --image bypasses the trailing-newline workaround (NUL fidelity)" {
+@test "past --image prints binary bytes as they are, NUL bytes too" {
   # Arrange:
-  # the workaround calls $(...), which corrupts NUL bytes.
-  # When MIME is image/*, past must exec wl-paste directly
-  # so the binary payload reaches stdout intact.
-  printf 'a\x00b' > "$FAKE_CLIPBOARD_FILE"
+  # the newline fix of wl-paste goes through $(...), which loses NUL bytes,
+  # so an image must skip it.
+  local -r output_path="${BATS_TEST_TMPDIR}/past-image.bin"
+  printf 'a\x00b' >"${FAKE_CLIPBOARD_FILE}"
 
   # Act:
-  # capture into a temp file to preserve NULs across `run` boundaries.
-  local -r out_file="${BATS_TEST_TMPDIR}/past-image.bin"
-  past --image > "$out_file"
-  local -ir rc=$?
+  # the output goes to a file, since a variable cannot hold NUL bytes.
+  past --image >"${output_path}"
 
-  # Assert
-  [ "$rc" -eq 0 ]
-  # a (61), NUL (00), b (62)
-  [ "$(__cp_hex < "$out_file")" = '610062' ]
+  # Assert: a, NUL, b.
+  [[ "$(print_hex <"${output_path}")" == '610062' ]]
 }
 
-# endregion
+# endregion Images
 
-### End of file
+# region Options that do not fit together
+
+#######################################
+# Check that an option for text refuses --image, with its message.
+#
+# Arguments:
+#   1: The option: --append or --trim.
+#######################################
+function text_option_refuses_image() {
+  # Arrange
+  local -r option="$1"
+
+  # Act
+  run --separate-stderr run_snippet "printf 'x' | copy ${option} --image"
+
+  # Assert
+  ((status == COPY_ERR_TYPE_MISMATCH))
+  [[ "${stderr}" == *"${option} is only valid for text payloads"* ]]
+}
+
+for option_name in --append --trim; do
+  bats_test_function \
+    --description "copy ${option_name} --image fails with the type-mismatch code" \
+    -- text_option_refuses_image "${option_name}"
+done
+
+# endregion Options that do not fit together
+
+### End

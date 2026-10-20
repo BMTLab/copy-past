@@ -5,6 +5,37 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- Exit code 70, `COPY_ERR_INTERNAL` and `PAST_ERR_INTERNAL`, for a bug.
+  Run as programs, copy and past now stop at a failure
+  that no exit code plans for,
+  print its line and command on stderr, and exit 70.
+  Before, they went on after such a failure.
+- `copy --help` and `past --help` list the exit codes.
+
+### Changed
+
+- Each message starts with the name of the tool, `copy:` or `past:`,
+  no longer with `ERROR:`, and a second line says what to do next,
+  such as `copy: unknown option: --bogus`, then `copy: see: copy --help`.
+- `--help` names `COPY_PAST_BACKEND` under Settings,
+  no longer under Environment.
+- copy and past need bash 4.4 or newer, no longer 4.3:
+  run as programs, they turn on `shopt -s inherit_errexit`.
+
+### Fixed
+
+- copy and past run with the first bash on PATH
+  (`#!/usr/bin/env bash`), no longer with `/bin/bash`.
+  On macOS, a bash from Homebrew now runs them,
+  not the bash 3.2 of the system, which cannot run them.
+- Sourced into a shell, copy and past no longer run
+  a shell function or alias that has the name of a program they use,
+  such as `cat`, `rm`, `sed` or `jq`, or of a backend.
+
 ## [2.0.1] - 2026-10-09
 
 ### Fixed

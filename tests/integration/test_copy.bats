@@ -1,267 +1,230 @@
 #!/usr/bin/env bats
 
-# Name: tests/integration/test_copy.bats
-# Author: Nikita Neverov (BMTLab)
-# License: MIT
-#
-# Description:
-#   End-to-end behavioural tests for copy.sh.
-#   Uses a fake clipboard backend (see tests/support/fakes.bash),
-#   so the tests are hermetic
-#   and never touch the real system clipboard.
-#
-#   Scope:
-#     - argument mode (joining, single-arg)
-#     - pipe mode    (multi-line, trailing-newline preservation)
-#     - default ANSI stripping vs --raw
-#     - help / unknown-option / no-input / no-backend error paths
-#     - exit-code constants match documented values
-#
-#   Pure parser-level cases
-#     (synonyms, --type=MIME equals form, malformed values, etc.)
-#     live in tests/unit/test_options.bats.
-#   ANSI-stripping coverage of additional escape grammars
-#     lives in tests/unit/test_text.bats.
-#
-#   Each test follows the Arrange-Act-Assert (AAA) pattern.
-#
-# Disclaimer:
-#   This script is provided 'as is', without any warranty.
+# Tests what copy writes to a fake clipboard, and how it fails.
 
-bats_require_minimum_version 1.5.0
+bats_require_minimum_version 1.11.0
 
 load '../support/test_helper.bash'
 
-setup() {
-  __cp_setup_fake_backend
-  __cp_load_scripts
+function setup() {
+  setup_fake_backends
+  load_scripts
 }
-
 
 # region Argument mode
 
-@test "argument mode copies a single argument" {
-  # Arrange
-  local -r payload='hello world'
-
-  # Act:
-  # argument mode requires stdin to be a tty
-  # (otherwise the script enters pipe mode);
-  # see __cp_run_with_tty for the pty trick.
-  run --separate-stderr __cp_run_copy_argv "'$payload'"
-
-  # Assert
-  [ "$status" -eq 0 ]
-  [ "$(__cp_clipboard_dump)" = "$payload" ]
-}
-
-@test "argument mode joins multiple args with single spaces" {
-  # Arrange
-  local -r expected='line 1 with spaces two'
+@test "copy writes one argument to the clipboard" {
+  # Arrange: argument mode needs a terminal as stdin; see run_in_terminal.
 
   # Act
-  run --separate-stderr __cp_run_copy_argv \
-    "line 1 'with spaces' two"
+  run --separate-stderr run_copy_in_terminal "'hello world'"
 
   # Assert
-  [ "$status" -eq 0 ]
-  [ "$(__cp_clipboard_dump)" = "$expected" ]
+  ((status == 0))
+  [[ "$(print_clipboard)" == 'hello world' ]]
 }
 
-# endregion
-
-
-# region Pipe mode (byte fidelity)
-
-@test "pipe mode preserves byte fidelity for canonical payloads" {
-  # Arrange:
-  # rows are 'label|printf-payload|expected-hex'.
-  # Covers single-line, multi-line, and trailing-newline cases
-  # in one table-driven test, since the pipe-mode wiring is the
-  # same code path: only the input bytes change.
-  local -ra cases=(
-    'single-line|abc|616263'
-    'multi-line-no-trailing-lf|line1\nline2\nline3|6c696e65310a6c696e65320a6c696e6533'
-    'multi-line-with-trailing-lf|line1\nline2\n|6c696e65310a6c696e65320a'
-  )
-
-  local row label payload expected
-  for row in "${cases[@]}"; do
-    label="${row%%|*}"
-    local rest="${row#*|}"
-    payload="${rest%%|*}"
-    expected="${rest#*|}"
-
-    # Reset the clipboard so a previous row cannot leak into this one.
-    __cp_clipboard_set ''
-
-    # Act
-    run --separate-stderr __cp_run "printf '${payload}' | copy"
-
-    # Assert
-    [ "$status" -eq 0 ] || {
-      printf 'Row %s exited with %d\n' "$label" "$status" >&2
-      false
-    }
-    local got
-    got="$(__cp_clipboard_hex)"
-    [ "$got" = "$expected" ] || {
-      printf 'Row %s mismatch:\n  got      %s\n  expected %s\n' \
-        "$label" "$got" "$expected" >&2
-      false
-    }
-  done
-}
-
-# endregion
-
-
-# region ANSI stripping (default vs --raw)
-
-@test "ANSI escape sequences are stripped by default" {
-  # Arrange:
-  # SGR colors and a hyperlink (OSC) embedded in the payload.
-  local -r expected=$'red\ngreen'
+@test "copy joins its arguments with single spaces" {
+  # Arrange: the second word holds spaces of its own.
 
   # Act
-  run --separate-stderr __cp_run \
+  run --separate-stderr run_copy_in_terminal "line 1 'with spaces' two"
+
+  # Assert
+  ((status == 0))
+  [[ "$(print_clipboard)" == 'line 1 with spaces two' ]]
+}
+
+# endregion Argument mode
+
+# region Pipe mode
+
+#######################################
+# Check that copy writes a piped payload byte for byte.
+#
+# Arguments:
+#   1: The payload, as printf prints it with %b.
+#   2: The bytes expected in the clipboard, as hex.
+#######################################
+function pipe_mode_keeps_every_byte() {
+  # Arrange
+  local -r payload="$1"
+  local -r expected_hex="$2"
+  local -r payload_path="${BATS_TEST_TMPDIR}/payload.txt"
+  printf '%b' "${payload}" >"${payload_path}"
+
+  # Act
+  run --separate-stderr run_snippet "copy <${payload_path@Q}"
+
+  # Assert
+  ((status == 0))
+  [[ "$(print_clipboard_hex)" == "${expected_hex}" ]]
+}
+
+bats_test_function --description "copy writes a piped line byte for byte" \
+  -- pipe_mode_keeps_every_byte 'abc' '616263'
+bats_test_function \
+  --description "copy writes piped lines without a last newline byte for byte" \
+  -- pipe_mode_keeps_every_byte 'line1\nline2\nline3' \
+  '6c696e65310a6c696e65320a6c696e6533'
+bats_test_function \
+  --description "copy writes piped lines with a last newline byte for byte" \
+  -- pipe_mode_keeps_every_byte 'line1\nline2\n' '6c696e65310a6c696e65320a'
+
+# endregion Pipe mode
+
+# region ANSI escape sequences
+
+@test "copy removes ANSI escape sequences by default" {
+  # Arrange: SGR colors around two words.
+
+  # Act
+  run --separate-stderr run_snippet \
     'printf "\033[31mred\033[0m\n\033[32mgreen\033[0m" | copy'
 
   # Assert
-  [ "$status" -eq 0 ]
-  [ "$(__cp_clipboard_dump)" = "$expected" ]
+  ((status == 0))
+  [[ "$(print_clipboard)" == $'red\ngreen' ]]
 }
 
-@test "--raw preserves ANSI escape sequences (pipe and argument modes)" {
-  # Arrange
-  local -r expected=$'\033[31mred\033[0m'
-
-  # Act (pipe mode)
-  run --separate-stderr __cp_run \
-    'printf "\033[31mred\033[0m" | copy --raw'
-  [ "$status" -eq 0 ]
-  [ "$(__cp_clipboard_dump)" = "$expected" ]
-
-  # Reset the clipboard so the second assertion is meaningful.
-  __cp_clipboard_set ''
-
-  # Act (argument mode)
-  run --separate-stderr __cp_run_copy_argv "--raw $'\\033[31mred\\033[0m'"
-
-  # Assert
-  [ "$status" -eq 0 ]
-  [ "$(__cp_clipboard_dump)" = "$expected" ]
-}
-
-@test "ANSI stripping leaves plain text untouched" {
-  # Arrange
-  local -r expected='plain text without escapes'
+@test "copy --raw keeps ANSI escape sequences in pipe mode" {
+  # Arrange: an SGR color.
 
   # Act
-  run --separate-stderr __cp_run \
+  run --separate-stderr run_snippet 'printf "\033[31mred\033[0m" | copy --raw'
+
+  # Assert
+  ((status == 0))
+  [[ "$(print_clipboard)" == $'\033[31mred\033[0m' ]]
+}
+
+@test "copy --raw keeps ANSI escape sequences in argument mode" {
+  # Arrange: an SGR color, as an argument.
+
+  # Act
+  run --separate-stderr run_copy_in_terminal "--raw $'\\033[31mred\\033[0m'"
+
+  # Assert
+  ((status == 0))
+  [[ "$(print_clipboard)" == $'\033[31mred\033[0m' ]]
+}
+
+@test "copy leaves plain text as it is" {
+  # Arrange: no escape sequence at all.
+
+  # Act
+  run --separate-stderr run_snippet \
     'printf "%s" "plain text without escapes" | copy'
 
   # Assert
-  [ "$status" -eq 0 ]
-  [ "$(__cp_clipboard_dump)" = "$expected" ]
+  ((status == 0))
+  [[ "$(print_clipboard)" == 'plain text without escapes' ]]
 }
 
-# endregion
+# endregion ANSI escape sequences
 
+# region Help and options
 
-# region Help / option-parsing dispatch
+@test "copy --help prints the usage to stdout and exits 0" {
+  # Arrange: --help stops copy before any backend.
 
-@test "--help prints usage to stdout and exits 0" {
-  # Arrange / Act
+  # Act
   run --separate-stderr copy --help
 
   # Assert
-  [ "$status" -eq 0 ]
-  [[ "$output" == *'copy - write'*'system clipboard'* ]]
-  [[ "$output" == *'--raw'* ]]
-  [[ "$output" == *'--debug'* ]]
+  ((status == 0))
+  [[ "${output}" == *'copy - write'*'system clipboard'* ]]
+  [[ "${output}" == *'--raw'* ]]
+  [[ "${output}" == *'--debug'* ]]
 }
 
-@test "-- terminates option parsing; subsequent args become text" {
-  # Arrange
-  local -r expected='--raw not-a-flag'
+@test "copy takes the words after -- as text" {
+  # Arrange: --raw after -- is a word of the text.
 
   # Act
-  run --separate-stderr __cp_run_copy_argv "-- --raw not-a-flag"
+  run --separate-stderr run_copy_in_terminal '-- --raw not-a-flag'
 
   # Assert
-  [ "$status" -eq 0 ]
-  [ "$(__cp_clipboard_dump)" = "$expected" ]
+  ((status == 0))
+  [[ "$(print_clipboard)" == '--raw not-a-flag' ]]
 }
 
-@test "unknown option fails with COPY_ERR_USAGE (rc=2)" {
-  # Arrange / Act
+@test "copy refuses an unknown option with the usage code" {
+  # Arrange: --bogus is no option of copy.
+
+  # Act
   run --separate-stderr copy --bogus
 
   # Assert
-  [ "$status" -eq "$COPY_ERR_USAGE" ]
-  [[ "$stderr" == *'Unknown option'* ]]
+  ((status == COPY_ERR_USAGE))
+  [[ "${stderr}" == *'unknown option'* ]]
 }
 
-# endregion
-
-
-# region Error paths
-
-@test "no input (no args, tty stdin) fails with COPY_ERR_USAGE (rc=2)" {
-  # Arrange:
-  # we explicitly allocate a pty for stdin
-  # so the script enters argument mode
-  # rather than reading zero bytes from a piped stdin.
+@test "copy prefixes each line of a message with its name" {
+  # Arrange: --bogus is no option of copy.
 
   # Act
-  run --separate-stderr __cp_run_copy_argv ''
+  run --separate-stderr copy --bogus
 
-  # Assert
-  [ "$status" -eq "$COPY_ERR_USAGE" ]
+  # Assert: what went wrong, then what to do next.
+  [[ "${stderr}" == $'copy: unknown option: --bogus\ncopy: see: copy --help' ]]
 }
 
-@test "missing backend reports COPY_ERR_NO_BACKEND (rc=3)" {
-  # Arrange / Act
-  run --separate-stderr __cp_run_no_backend "
-    source '${COPY_PAST_ROOT}/copy.sh'
-    printf '%s' x | copy
-  "
+# endregion Help and options
+
+# region Failures
+
+@test "copy refuses no input at all with the usage code" {
+  # Arrange: a terminal as stdin, and no words.
+
+  # Act
+  run --separate-stderr run_copy_in_terminal ''
 
   # Assert
-  [ "$status" -eq "$COPY_ERR_NO_BACKEND" ]
-  [[ "$stderr" == *'No clipboard backend found'* ]]
+  ((status == COPY_ERR_USAGE))
 }
 
-# endregion
+@test "copy reports a missing backend with its code" {
+  # Arrange: PATH holds no backend; see run_without_backends.
 
+  # Act
+  run --separate-stderr run_without_backends "printf '%s' x | copy"
+
+  # Assert
+  ((status == COPY_ERR_NO_BACKEND))
+  [[ "${stderr}" == *'no clipboard backend found'* ]]
+}
+
+# endregion Failures
 
 # region Constants
 
-@test "exit code constants match documented values" {
-  # Arrange / Act:
-  # the constants are populated when copy.sh is sourced in setup().
+@test "the exit codes of copy keep their documented values" {
+  # Arrange: setup sourced copy.sh.
+
+  # Act: the constants are the input.
 
   # Assert
-  [ "$COPY_ERR_GENERAL" -eq 1 ]
-  [ "$COPY_ERR_USAGE" -eq 2 ]
-  [ "$COPY_ERR_NO_BACKEND" -eq 3 ]
-  [ "$COPY_ERR_BACKEND_FAILED" -eq 4 ]
-  [ "$COPY_ERR_TYPE_MISMATCH" -eq 5 ]
+  ((COPY_ERR_GENERAL == 1))
+  ((COPY_ERR_USAGE == 2))
+  ((COPY_ERR_NO_BACKEND == 3))
+  ((COPY_ERR_BACKEND_FAILED == 4))
+  ((COPY_ERR_TYPE_MISMATCH == 5))
+  ((COPY_ERR_INTERNAL == 70))
 }
 
-@test "constants survive re-sourcing (idempotency)" {
-  # Arrange / Act:
-  # __cp_run sources both copy.sh and past.sh,
-  # so a successful inner `echo ok` proves re-sourcing
-  # did not trip a `readonly` redeclaration.
-  run --separate-stderr __cp_run 'echo ok'
+@test "copy.sh can be sourced twice in one shell" {
+  # Arrange: run_snippet sources copy.sh, and the snippet sources it again,
+  # as a reload of ~/.bashrc does; a readonly constant must not fail.
+
+  # Act
+  run --separate-stderr run_snippet "source ${COPY_PAST_ROOT@Q}/copy.sh && printf ok"
 
   # Assert
-  [ "$status" -eq 0 ]
-  [ "$output" = 'ok' ]
+  ((status == 0))
+  [[ "${output}" == 'ok' ]]
 }
 
-# endregion
+# endregion Constants
 
-### End of file
+### End

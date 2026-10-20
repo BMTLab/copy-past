@@ -1,55 +1,64 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
-# Name: tests/support/clipboard.bash
-# Author: Nikita Neverov (BMTLab)
-# License: MIT
+# Read and fill the fake clipboard, and print bytes as hex for exact checks.
+
+#######################################
+# Print the fake clipboard as it is.
 #
-# Description:
-#   Inspection helpers that read or pre-load the fake clipboard.
-#   Loaded by tests/support/test_helper.bash.
-
-#######################################
-# Read the raw clipboard contents recorded by the fake backend.
-#######################################
-__cp_clipboard_dump() {
-  cat "$FAKE_CLIPBOARD_FILE"
-}
-
-#######################################
-# Pre-load the clipboard with arbitrary bytes (used by past tests).
-#
-# Arguments:
-#   1: payload string (printed verbatim, no trailing newline).
-#######################################
-__cp_clipboard_set() {
-  printf '%s' "$1" > "$FAKE_CLIPBOARD_FILE"
-}
-
-#######################################
-# Hex-dump a string with one continuous line (no spaces or breaks).
-# Useful for asserting byte-fidelity round-trips
-# without losing trailing newlines through command substitution.
-#
-# Arguments:
-#   1: payload to dump (defaults to stdin if omitted).
+# Globals:
+#   FAKE_CLIPBOARD_FILE: read.
 #
 # Outputs:
-#   Lowercase hex string on stdout.
+#   The clipboard, to stdout.
 #######################################
-__cp_hex() {
-  if [[ $# -gt 0 ]]; then
-    printf '%s' "$1" | xxd -p | tr -d '\n'
-  else
-    xxd -p | tr -d '\n'
-  fi
+function print_clipboard() {
+  cat -- "${FAKE_CLIPBOARD_FILE}"
 }
 
 #######################################
-# Hex-dump the current fake clipboard file.
-# Convenience wrapper over `xxd -p $FAKE_CLIPBOARD_FILE`.
+# Fill the fake clipboard, for the tests of past.
+#
+# Arguments:
+#   1: The text; no newline follows it.
+#
+# Globals:
+#   FAKE_CLIPBOARD_FILE: read.
 #######################################
-__cp_clipboard_hex() {
-  xxd -p "$FAKE_CLIPBOARD_FILE" | tr -d '\n'
+function set_clipboard() {
+  printf '%s' "$1" >"${FAKE_CLIPBOARD_FILE}"
 }
 
-### End of file
+#######################################
+# Print stdin as one line of lowercase hex.
+#
+# A command substitution drops trailing newlines;
+# hex keeps them, so a test can check every byte.
+#
+# Inputs:
+#   The bytes, on stdin.
+#
+# Outputs:
+#   The hex, to stdout, with no newline.
+#######################################
+function print_hex() {
+  local hex
+
+  hex="$(xxd -p)" || return
+
+  printf '%s' "${hex//$'\n'/}"
+}
+
+#######################################
+# Print the fake clipboard as one line of lowercase hex.
+#
+# Globals:
+#   FAKE_CLIPBOARD_FILE: read.
+#
+# Outputs:
+#   The hex, to stdout, with no newline.
+#######################################
+function print_clipboard_hex() {
+  print_hex <"${FAKE_CLIPBOARD_FILE}"
+}
+
+### End

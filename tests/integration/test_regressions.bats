@@ -1,143 +1,101 @@
 #!/usr/bin/env bats
 
-# Name: tests/integration/test_regressions.bats
-# Author: Nikita Neverov (BMTLab)
-# License: MIT
-#
-# Description:
-#   End-to-end regression tests for bugs fixed in v1.2.0+:
-#
-#     1. past.sh: wl-paste failures used to be masked
-#        by the trailing `printf x` inside the $() capture.
-#        The new sentinel encodes the wl-paste exit code,
-#        so failures propagate as PAST_ERR_BACKEND_FAILED.
-#     2. copy.sh: failures of any pipeline stage
-#        (sed in the strip step, or the backend itself)
-#        used to be hidden by bash's default behaviour
-#        of returning only the last command's exit code.
-#        The pipeline now runs under `set -o pipefail`.
-#     3. copy.sh: the process that wl-copy or xclip leaves behind
-#        to serve the clipboard inherited the output of copy,
-#        so `$(printf x | copy)` waited
-#        until another program took the clipboard.
-#        The backend now writes to output of its own,
-#        and copy relays its error messages to stderr.
-#
-#   ANSI grammar coverage and parser-level robustness checks
-#   live in the unit suite
-#   (tests/unit/test_text.bats, tests/unit/test_options.bats);
-#   the regression file exercises only behaviours
-#   that require a real pipeline and a fake backend
-#   to be observable.
-#
-#   Each test follows the Arrange-Act-Assert (AAA) pattern.
-#
-# Disclaimer:
-#   This script is provided 'as is', without any warranty.
+# Tests the bugs that were fixed, so none of them comes back.
 
-bats_require_minimum_version 1.5.0
+bats_require_minimum_version 1.11.0
 
 load '../support/test_helper.bash'
 
-setup() {
-  __cp_setup_fake_backend
-  __cp_load_scripts
+function setup() {
+  setup_fake_backends
+  load_scripts
 }
 
+# region past reports a failure of wl-paste
 
-# region Fix 1: past.sh propagates wl-paste failures
-
-@test "past propagates wl-paste failure (exit code is no longer masked)" {
+@test "past reports a failure of wl-paste with the backend code" {
   # Arrange:
-  # tell the fake wl-paste to exit non-zero.
-  __cp_clipboard_set 'irrelevant'
+  # past puts x and the status of wl-paste after its output,
+  # and once the trailing x hid the failure.
+  set_clipboard 'irrelevant'
 
   # Act
-  run --separate-stderr __cp_run '
-    export FAKE_WL_PASTE_RC=42
+  run --separate-stderr run_snippet '
+    export FAKE_WL_PASTE_CODE=42
     past
   '
 
-  # Assert:
-  # must surface PAST_ERR_BACKEND_FAILED (rc=4), NOT 0.
-  [ "$status" -eq "$PAST_ERR_BACKEND_FAILED" ]
-  [[ "$stderr" == *'Clipboard backend failed to read'* ]]
+  # Assert
+  ((status == PAST_ERR_BACKEND_FAILED))
+  [[ "${stderr}" == *'clipboard backend failed to read'* ]]
 }
 
-# endregion
+# endregion past reports a failure of wl-paste
 
+# region copy reports a failure of any stage
 
-# region Fix 2: copy.sh detects pipeline-stage failures via pipefail
-
-@test "copy reports backend failure when wl-copy exits non-zero" {
+@test "copy reports a failure of wl-copy with the backend code" {
   # Arrange
-  __cp_install_failing_wl_copy 7
+  install_failing_wl_copy 7
 
   # Act
-  run --separate-stderr __cp_run 'printf "%s" "data" | copy'
-
-  # Assert:
-  # pipefail must surface the backend failure
-  # as COPY_ERR_BACKEND_FAILED (rc=4).
-  [ "$status" -eq "$COPY_ERR_BACKEND_FAILED" ]
-  [[ "$stderr" == *'Clipboard backend failed'* ]]
-}
-
-@test "copy reports backend failure even when sed succeeds (pipefail middle stage)" {
-  # Arrange:
-  # backend exits non-zero AFTER sed has produced clean output.
-  # Without pipefail, the cleanup stage would mask this.
-  __cp_install_failing_wl_copy 13
-
-  # Act:
-  # ANSI sequence forces the strip-stage to actually do work,
-  # so we exercise the middle pipeline stage, not just the backend.
-  run --separate-stderr __cp_run 'printf "\033[31mred\033[0m" | copy'
+  run --separate-stderr run_snippet 'printf "%s" "data" | copy'
 
   # Assert
-  [ "$status" -eq "$COPY_ERR_BACKEND_FAILED" ]
+  ((status == COPY_ERR_BACKEND_FAILED))
+  [[ "${stderr}" == *'clipboard backend failed'* ]]
 }
 
-# endregion
+@test "copy reports a failing backend after a filter that worked" {
+  # Arrange:
+  # sed removes the colors and succeeds, then the backend fails;
+  # without pipefail, a stage before the last one would hide it.
+  install_failing_wl_copy 13
 
+  # Act
+  run --separate-stderr run_snippet 'printf "\033[31mred\033[0m" | copy'
 
-# region Fix 3: copy.sh keeps the backend off the output of its caller
+  # Assert
+  ((status == COPY_ERR_BACKEND_FAILED))
+}
+
+# endregion copy reports a failure of any stage
+
+# region copy keeps the backend off the output of its caller
 
 @test "copy inside \$(...) returns while the backend still serves the clipboard" {
   # Arrange:
   # like the real wl-copy, the fake leaves a process behind
-  # that keeps the stdout and stderr it inherited, here for 10 s.
-  __cp_install_forking_wl_copy 10
+  # that keeps the stdout and stderr it got, here for 10 s.
+  install_forking_wl_copy 10
 
-  # Act:
-  # $(...) waits until every process holding its pipe is gone.
-  run --separate-stderr __cp_run '
-    started=$SECONDS
+  # Act: $(...) waits until no process holds its pipe.
+  run --separate-stderr run_snippet '
+    started="${SECONDS}"
     captured="$(printf "%s" "data" | copy)"
     printf "%s" "$((SECONDS - started))"
   '
 
-  # Assert:
-  # the capture ends long before the process left behind does.
-  [ "$status" -eq 0 ]
-  [ "$output" -lt 5 ]
-  [ "$(__cp_clipboard_dump)" = 'data' ]
+  # Assert: the capture ends long before the process left behind.
+  ((status == 0))
+  [[ "${output}" =~ ^[0-9]+$ ]]
+  ((output < 5))
+  [[ "$(print_clipboard)" == 'data' ]]
 }
 
 @test "copy still shows the error message of a failing backend" {
   # Arrange
-  __cp_install_failing_wl_copy 1 'wl-copy: failed to connect to a Wayland server'
+  install_failing_wl_copy 1 'wl-copy: failed to connect to a Wayland server'
 
   # Act
-  run --separate-stderr __cp_run 'printf "%s" "data" | copy'
+  run --separate-stderr run_snippet 'printf "%s" "data" | copy'
 
-  # Assert:
-  # the message of the backend itself, besides the one of copy.
-  [ "$status" -eq "$COPY_ERR_BACKEND_FAILED" ]
-  [[ "$stderr" == *'wl-copy: failed to connect to a Wayland server'* ]]
-  [[ "$stderr" == *'Clipboard backend failed'* ]]
+  # Assert: the message of the backend comes with the one of copy.
+  ((status == COPY_ERR_BACKEND_FAILED))
+  [[ "${stderr}" == *'wl-copy: failed to connect to a Wayland server'* ]]
+  [[ "${stderr}" == *'clipboard backend failed'* ]]
 }
 
-# endregion
+# endregion copy keeps the backend off the output of its caller
 
-### End of file
+### End

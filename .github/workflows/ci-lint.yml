@@ -101,7 +101,7 @@ jobs:
         run: |
           set -o errexit -o nounset -o pipefail
           make lint
-          echo '::notice title=shellcheck::No findings on copy.sh / past.sh'
+          echo '::notice title=shellcheck::No findings in the scripts and the tests'
 
       - name: 🎨 shfmt
         run: |
@@ -110,14 +110,14 @@ jobs:
           echo '::notice title=shfmt::Formatting matches the project style'
 
       # Runs ONLY the style-gate bats file,
-      # which checks the cdl-style header convention,
-      # the presence of Version/Date,
+      # which checks the header card and the execution guard,
+      # the exit codes in the header and the README,
       # and the shfmt diff (idempotency check).
       - name: 🧪 Custom style gate (bats)
         run: |
           set -o errexit -o nounset -o pipefail
           bats tests/integration/test_code_style.bats
-          echo '::notice title=Style gate::Headers + shfmt-idempotency checks passed'
+          echo '::notice title=Style gate::Header cards, guards and shfmt checks passed'
 
 # endregion
 

@@ -1,0 +1,29 @@
+# tests/.shellcheckrc
+#
+# ShellCheck reads only the nearest .shellcheckrc,
+# so this file repeats the project rules from ../.shellcheckrc
+# and adds the exceptions that the test suite needs by design.
+
+shell=bash
+external-sources=true
+source-path=SCRIPTDIR
+enable=avoid-nullary-conditions
+enable=check-unassigned-uppercase
+enable=deprecate-which
+enable=require-double-brackets
+
+# SC2016: a snippet for a new bash sits in single quotes,
+# so that its $1 and $@ expand there, not in bats.
+disable=SC2016
+
+# SC2030, SC2031: ShellCheck models each @test as a subshell
+# and flags the output, status and stderr that bats' `run` sets.
+disable=SC2030,SC2031
+
+# SC2154: bats sets output, status and stderr at run time,
+# and its `load` hides the globals of the support modules.
+disable=SC2154
+
+# As in ../.shellcheckrc: braces and quotes everywhere.
+enable=require-variable-braces
+enable=quote-safe-variables

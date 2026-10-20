@@ -1,241 +1,193 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
-# Name: tests/support/runners.bash
-# Author: Nikita Neverov (BMTLab)
-# License: MIT
-#
-# Description:
-#   High-level helpers that run copy.sh / past.sh in the right
-#   environment and return the result for `run`-style assertions.
-#
-#   Replaces ~60 inline copies of:
-#     bash -c '
-#       source "${COPY_PAST_ROOT}/copy.sh"
-#       ...
-#     '
-#
-#   Loaded by tests/support/test_helper.bash.
+# Run copy and past for the tests: sourced here, in a new bash, or in a terminal.
 
-# region Source loaders
+# region Sourced scripts
 
 #######################################
-# Source copy.sh and past.sh into the current shell,
-# so tests can call the functions directly.
-# Both scripts' execution guards skip auto-running when sourced.
+# Source copy.sh and past.sh into the test shell,
+# then turn on the options of their guard,
+# so the functions run as they do in a program.
+#
+# Globals:
+#   COPY_PAST_ROOT: read.
 #######################################
-__cp_load_scripts() {
+function load_scripts() {
   # shellcheck source=../../copy.sh
   source "${COPY_PAST_ROOT}/copy.sh"
   # shellcheck source=../../past.sh
   source "${COPY_PAST_ROOT}/past.sh"
+  set -o nounset -o pipefail
+  shopt -s inherit_errexit
 }
 
-# endregion
-
-# region Subshell runners
-
 #######################################
-# Run a bash snippet that has both copy.sh and past.sh sourced.
-#
-# Designed for use with `run --separate-stderr`, e.g.:
-#
-#   run --separate-stderr __cp_run "printf '%s' hi | copy --debug"
+# Print the lines that a new bash runs first:
+# it sources the scripts and turns on the options of their guard.
 #
 # Arguments:
-#   1: bash snippet (single string, may use $-vars and quoting).
+#   $@: The scripts to source: copy.sh, past.sh or both.
+#
+# Globals:
+#   COPY_PAST_ROOT: read.
+#
+# Outputs:
+#   The lines, to stdout.
 #######################################
-__cp_run() {
+function print_snippet_prelude() {
+  local script_name
+
+  for script_name in "$@"; do
+    printf 'source %s/%s\n' "${COPY_PAST_ROOT@Q}" "${script_name}"
+  done
+  printf '%s\n' 'set -o nounset -o pipefail' 'shopt -s inherit_errexit'
+}
+
+# endregion Sourced scripts
+
+# region A new bash
+
+#######################################
+# Run a snippet in a new bash that sourced copy.sh and past.sh.
+#
+# Arguments:
+#   1: The snippet.
+#######################################
+function run_snippet() {
   local -r snippet="$1"
-  bash -c "
-    source '${COPY_PAST_ROOT}/copy.sh'
-    source '${COPY_PAST_ROOT}/past.sh'
-    ${snippet}
-  "
+  local prelude
+
+  prelude="$(print_snippet_prelude copy.sh past.sh)"
+
+  bash -c "${prelude}"$'\n'"${snippet}"
 }
 
 #######################################
-# Run `past` and capture its raw output preserving trailing newlines.
-#
-# Replaces the duplicated sentinel pattern:
-#   out="$(past; printf x)"
-#   out="${out%x}"
-#   printf '%s' "$out"
-#
-# Designed for use with `run --separate-stderr`. The captured value
-# is written to stdout verbatim, so subsequent assertions can pipe
-# it to `xxd -p` etc.
+# Run past and print what it prints, trailing newlines too.
 #
 # Arguments:
-#   $@: extra flags to pass to past (e.g. --type, --image, --debug).
+#   $@: The options of past.
+#
+# Outputs:
+#   The output of past, to stdout, byte for byte.
 #######################################
-__cp_run_past_raw() {
-  bash -c "
-    source '${COPY_PAST_ROOT}/past.sh'
-    out=\"\$(past \"\$@\"; printf x)\"
-    out=\"\${out%x}\"
-    printf '%s' \"\$out\"
-  " __cp_run_past_raw "$@"
+function run_past_keeping_newlines() {
+  local prelude
+
+  prelude="$(print_snippet_prelude past.sh)"
+
+  # past prints, then x; removing the x keeps the newlines before it.
+  bash -c "${prelude}"'
+    output="$(past "$@"; printf x)"
+    printf "%s" "${output%x}"
+  ' run_past_keeping_newlines "$@"
 }
 
-# endregion
-
-# region Pseudo-terminal runner
-
 #######################################
-# Run a snippet under a pseudo-terminal so that
-# `if [[ ! -t 0 ]]; then # pipe mode` evaluates to false
-# and the script enters argument-mode.
-#
-# Why this is needed:
-#   bats by itself does not allocate a pty for `run`,
-#   and `bash -c` inherits whatever stdin bats has.
-#   When bats is launched from a non-interactive shell (CI),
-#   stdin is a pipe, not a tty,
-#   so argument-mode code paths cannot be reached
-#   without explicit pty allocation.
-#
-# Implementation note:
-#   util-linux `script -qec '<cmd>' /dev/null` looks tempting,
-#   but `script` runs the command string through /bin/sh, which
-#   does not understand bash quoting like $'...' and `[[`.
-#   We sidestep that by writing the snippet to a temp file and
-#   asking script to run it via an explicit bash invocation.
-#
-# Cross-platform notes:
-#   - util-linux script (Linux) and BSD script (macOS) share
-#     `-q`, but their argv layouts diverge slightly.
-#   - The temp file is auto-cleaned at end of the bats test,
-#     because $BATS_TEST_TMPDIR is recreated per-test.
+# Write a payload with copy, read it back with past, and print it as hex.
 #
 # Arguments:
-#   $@: the shell snippet to execute (single string).
+#   1: The payload, as printf prints it with %b, so \033 and \n work.
+#   2...: The options of copy, such as --raw.
+#
+# Outputs:
+#   What past read, as one line of lowercase hex.
 #######################################
-__cp_run_with_tty() {
+function run_roundtrip_hex() {
+  local -r payload="$1"
+  local prelude
+  shift
+
+  prelude="$(print_snippet_prelude copy.sh past.sh)"
+
+  bash -c "${prelude}"'
+    payload="$1"
+    shift
+    printf "%b" "${payload}" | copy "$@"
+    output="$(past; printf x)"
+    printf "%s" "${output%x}" | xxd -p | tr -d "\n"
+  ' run_roundtrip_hex "${payload}" "$@"
+}
+
+#######################################
+# Run a snippet with a PATH of one empty directory,
+# so no backend is found, as on a host without one.
+#
+# WAYLAND_DISPLAY and XDG_SESSION_TYPE are gone too.
+# The snippet runs in a bash that sourced copy.sh and past.sh.
+#
+# Arguments:
+#   1: The snippet.
+#######################################
+function run_without_backends() {
+  local -r snippet="$1"
+  local -r empty_bin="${BATS_TEST_TMPDIR}/empty-bin"
+  local prelude bash_path
+
+  prelude="$(print_snippet_prelude copy.sh past.sh)"
+  bash_path="$(command -v bash)"
+  mkdir -p -- "${empty_bin}"
+
+  env -i HOME="${HOME}" PATH="${empty_bin}" \
+    "${bash_path}" -c "${prelude}"$'\n'"${snippet}"
+}
+
+# endregion A new bash
+
+# region A terminal
+
+#######################################
+# Run a snippet with a terminal as its stdin,
+# so copy takes its arguments as the text.
+#
+# bats gives a test no terminal, and in CI its stdin is a pipe,
+# so only a pseudo-terminal from script reaches argument mode.
+# script runs a command through /bin/sh, which knows no bash,
+# so the snippet goes into a file that bash runs.
+# The file lies in the directory of the test, which bats removes.
+#
+# Arguments:
+#   $@: The snippet; the words are joined by spaces.
+#
+# Outputs:
+#   The output of the snippet, with CRLF line ends from the terminal.
+#######################################
+function run_in_terminal() {
   local -r snippet="$*"
-  local bash_bin
-  bash_bin="$(command -v bash)"
+  local -r snippet_path="${BATS_TEST_TMPDIR}/terminal_snippet.sh"
+  local bash_path
 
-  local script_file="${BATS_TEST_TMPDIR:-/tmp}/__cp_tty_snippet.sh"
-  {
-    printf '#!%s\n' "$bash_bin"
-    printf '%s\n' "$snippet"
-  } > "$script_file"
-  chmod +x "$script_file"
+  bash_path="$(command -v bash)"
+  printf '#!%s\n%s\n' "${bash_path}" "${snippet}" >"${snippet_path}"
+  chmod +x -- "${snippet_path}"
 
-  if [[ "$(uname -s)" == 'Darwin' ]]; then
-    # BSD script: `script [-q] file [command...]`
-    script -q /dev/null "$bash_bin" "$script_file" < /dev/null
+  if [[ "${OSTYPE}" == darwin* ]]; then
+    # BSD script takes the command after the file.
+    script -q /dev/null "${bash_path}" "${snippet_path}" </dev/null
   else
-    # util-linux script: `script [-q] [-c command] file`.
-    # Pass an explicit bash invocation so the snippet does not
-    # have to pass through script's default /bin/sh wrapper.
-    script -qec "$bash_bin $script_file" /dev/null < /dev/null
+    # util-linux script takes the command as one string.
+    script -qec "${bash_path} ${snippet_path@Q}" /dev/null </dev/null
   fi
 }
 
 #######################################
-# Run a `copy` invocation in argument mode (with a tty stdin).
+# Run copy in a terminal, in argument mode.
 #
-# Convenience wrapper around __cp_run_with_tty for the common case
-# of "source copy.sh, then call copy with these positional words"
-# without manually splicing $COPY_PAST_ROOT into the snippet.
+# Only copy.sh is sourced, so --append runs the past.sh beside it.
 #
 # Arguments:
-#   $@: positional words for `copy` (already as separate args).
-#
-# Note:
-#   The args are joined with single spaces here, mirroring the way
-#   the user would type them on the shell. If you need to pass an
-#   arg that contains a literal space, fall back to __cp_run_with_tty
-#   directly so you can quote things explicitly.
+#   $@: The words of the command line of copy, joined by spaces:
+#       they are shell code, so a word with a space needs quotes.
 #######################################
-__cp_run_copy_argv() {
-  local args="$*"
-  __cp_run_with_tty "
-    source '${COPY_PAST_ROOT}/copy.sh'
-    copy ${args}
-  "
+function run_copy_in_terminal() {
+  local -r command_line="$*"
+  local prelude
+
+  prelude="$(print_snippet_prelude copy.sh)"
+
+  run_in_terminal "${prelude}"$'\n'"copy ${command_line}"
 }
 
-# endregion
+# endregion A terminal
 
-# region Empty-PATH runner (for no-backend tests)
-
-#######################################
-# Run a snippet with PATH stripped to a single empty directory,
-# so backend detection cannot find wl-copy / xclip / xsel.
-#
-# WAYLAND_DISPLAY and XDG_SESSION_TYPE are unset, mirroring a host
-# without any clipboard tooling installed. HOME is preserved
-# so bash itself can locate its rc files if it cares.
-#
-# Designed for use with `run --separate-stderr`, e.g.:
-#
-#   run --separate-stderr __cp_run_no_backend "
-#     source '${COPY_PAST_ROOT}/copy.sh'
-#     printf '%s' x | copy
-#   "
-#
-# Arguments:
-#   1: bash snippet (single string).
-#######################################
-__cp_run_no_backend() {
-  local -r snippet="$1"
-  local -r empty_bin="${BATS_TEST_TMPDIR}/empty-bin"
-  local bash_bin
-  bash_bin="$(command -v bash)"
-
-  mkdir -p "$empty_bin"
-
-  env -i \
-    HOME="$HOME" \
-    PATH="$empty_bin" \
-    "$bash_bin" -c "
-      unset WAYLAND_DISPLAY XDG_SESSION_TYPE
-      ${snippet}
-    "
-}
-
-# endregion
-
-# region Roundtrip runner
-
-#######################################
-# Run a payload through `copy | past` and emit the result as hex.
-#
-# Centralises the byte-fidelity round-trip pattern that
-# test_roundtrip.bats relies on:
-#   1. write payload via printf | copy
-#   2. read it back via past, preserving trailing newlines
-#   3. dump the captured bytes as one continuous hex line
-#
-# Designed for use with `run --separate-stderr`, e.g.:
-#
-#   run --separate-stderr __cp_run_roundtrip_hex \
-#     '\033[31mred\033[0m' --raw
-#
-#   [ "$output" = '1b5b33316d7265641b5b306d' ]
-#
-# Arguments:
-#   1:    payload string (passed verbatim to printf, so '\033', '\n'
-#         and other escapes are honoured).
-#   2..N: extra flags to forward to copy (e.g. --raw, --debug).
-#######################################
-__cp_run_roundtrip_hex() {
-  local -r payload="$1"
-  shift
-
-  bash -c "
-    source '${COPY_PAST_ROOT}/copy.sh'
-    source '${COPY_PAST_ROOT}/past.sh'
-    printf '${payload}' | copy \"\$@\"
-    out=\"\$(past; printf x)\"
-    out=\"\${out%x}\"
-    printf '%s' \"\$out\" | xxd -p | tr -d '\n'
-  " __cp_run_roundtrip_hex "$@"
-}
-
-# endregion
-
-
-### End of file
+### End

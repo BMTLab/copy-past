@@ -1,165 +1,143 @@
 #!/usr/bin/env bats
 
-# Name: tests/integration/test_past.bats
-# Author: Nikita Neverov (BMTLab)
-# License: MIT
-#
-# Description:
-#   End-to-end behavioural tests for past.sh.
-#   Uses a fake clipboard backend (see tests/support/fakes.bash),
-#   so the tests are hermetic
-#   and never touch the real system clipboard.
-#
-#   Scope:
-#     - reading the clipboard verbatim
-#     - the wl-paste trailing-newline workaround
-#       for wl-clipboard <= 2.2.1
-#     - help / no-backend error paths
-#     - exit-code constants match documented values
-#
-#   Pure parser-level cases live in tests/unit/test_options.bats.
-#
-#   Each test follows the Arrange-Act-Assert (AAA) pattern.
-#
-# Disclaimer:
-#   This script is provided 'as is', without any warranty.
+# Tests what past prints from a fake clipboard, and how it fails.
 
-bats_require_minimum_version 1.5.0
+bats_require_minimum_version 1.11.0
 
 load '../support/test_helper.bash'
 
-setup() {
-  __cp_setup_fake_backend
-  __cp_load_scripts
+function setup() {
+  setup_fake_backends
+  load_scripts
 }
 
+# region Reading
 
-# region Reading semantics
-
-@test "past prints clipboard content verbatim" {
+@test "past prints the clipboard as it is" {
   # Arrange
-  local -r payload='hello world'
-  __cp_clipboard_set "$payload"
+  set_clipboard 'hello world'
 
   # Act
   run --separate-stderr past
 
   # Assert
-  [ "$status" -eq 0 ]
-  [ "$output" = "$payload" ]
+  ((status == 0))
+  [[ "${output}" == 'hello world' ]]
 }
 
-@test "past preserves trailing-newline state byte-for-byte" {
-  # Arrange:
-  # rows are 'label|set-payload|expected-hex'.
-  # The 0x0a at the end of expected_hex is the only signal of
-  # whether the source had a trailing newline; past must NOT add one
-  # of its own, and must NOT strip an existing one.
-  local -ra cases=(
-    'no-trailing-lf|line1\nline2\nline3|6c696e65310a6c696e65320a6c696e6533'
-    'with-trailing-lf|line1\nline2\n|6c696e65310a6c696e65320a'
-    'preserves-ansi-bytes|\033[31mred\033[0m|1b5b33316d7265641b5b306d'
-  )
-
-  local row label payload expected
-  for row in "${cases[@]}"; do
-    label="${row%%|*}"
-    local rest="${row#*|}"
-    payload="${rest%%|*}"
-    expected="${rest#*|}"
-
-    # Decode the printf-format payload via `printf -v` (NOT command
-    # substitution), so trailing newlines survive and reach the
-    # clipboard intact. Command substitution would silently strip
-    # them and the 'with-trailing-lf' row would always fail.
-    local decoded
-    # shellcheck disable=SC2059
-    printf -v decoded "$payload"
-    __cp_clipboard_set "$decoded"
-
-    # Act:
-    # capture past's raw output via the sentinel helper,
-    # then dump it as a single hex line.
-    # We pipe DIRECTLY into __cp_hex without an intermediate $()
-    # because command substitution silently strips trailing newlines,
-    # and the trailing-newline state is exactly what we are testing.
-    local got
-    got="$(__cp_run_past_raw | __cp_hex)"
-
-    # Assert
-    [ "$got" = "$expected" ] || {
-      printf 'Row %s mismatch:\n  got      %s\n  expected %s\n' \
-        "$label" "$got" "$expected" >&2
-      false
-    }
-  done
-}
-
-@test "past returns empty string for empty clipboard" {
+#######################################
+# Check that past prints the clipboard byte for byte:
+# it adds no newline of its own, and keeps the newline of the text.
+#
+# Arguments:
+#   1: The clipboard, as printf prints it with %b.
+#   2: The bytes expected, as hex.
+#######################################
+function past_keeps_every_byte() {
   # Arrange
-  __cp_clipboard_set ''
+  local -r clipboard="$1"
+  local -r expected_hex="$2"
+  local -r output_path="${BATS_TEST_TMPDIR}/past.out"
+  printf '%b' "${clipboard}" >"${FAKE_CLIPBOARD_FILE}"
+
+  # Act:
+  # the output goes through a file, since $(...) would drop the newline.
+  run_past_keeping_newlines >"${output_path}"
+
+  # Assert
+  [[ "$(print_hex <"${output_path}")" == "${expected_hex}" ]]
+}
+
+bats_test_function \
+  --description "past prints lines without a last newline byte for byte" \
+  -- past_keeps_every_byte 'line1\nline2\nline3' \
+  '6c696e65310a6c696e65320a6c696e6533'
+bats_test_function \
+  --description "past prints lines with a last newline byte for byte" \
+  -- past_keeps_every_byte 'line1\nline2\n' '6c696e65310a6c696e65320a'
+bats_test_function \
+  --description "past prints ANSI escape sequences byte for byte" \
+  -- past_keeps_every_byte '\033[31mred\033[0m' '1b5b33316d7265641b5b306d'
+
+@test "past prints nothing for an empty clipboard" {
+  # Arrange
+  set_clipboard ''
 
   # Act
   run --separate-stderr past
 
   # Assert
-  [ "$status" -eq 0 ]
-  [ -z "$output" ]
+  ((status == 0))
+  [[ -z "${output}" ]]
 }
 
-# endregion
+# endregion Reading
 
+# region Help and failures
 
-# region Help / error paths
+@test "past --help prints the usage to stdout and exits 0" {
+  # Arrange: --help stops past before any backend.
 
-@test "--help prints usage to stdout and exits 0" {
-  # Arrange / Act
+  # Act
   run --separate-stderr past --help
 
   # Assert
-  [ "$status" -eq 0 ]
-  [[ "$output" == *'past - print system clipboard'* ]]
-  [[ "$output" == *'--debug'* ]]
+  ((status == 0))
+  [[ "${output}" == *'past - print system clipboard'* ]]
+  [[ "${output}" == *'--debug'* ]]
 }
 
-@test "missing backend reports PAST_ERR_NO_BACKEND (rc=3)" {
-  # Arrange / Act
-  run --separate-stderr __cp_run_no_backend "
-    source '${COPY_PAST_ROOT}/past.sh'
-    past
-  "
+@test "past reports a missing backend with its code" {
+  # Arrange: PATH holds no backend; see run_without_backends.
+
+  # Act
+  run --separate-stderr run_without_backends 'past'
 
   # Assert
-  [ "$status" -eq "$PAST_ERR_NO_BACKEND" ]
-  [[ "$stderr" == *'No clipboard backend found'* ]]
+  ((status == PAST_ERR_NO_BACKEND))
+  [[ "${stderr}" == *'no clipboard backend found'* ]]
 }
 
-# endregion
+@test "past prefixes each line of a message with its name" {
+  # Arrange: past takes no positional argument.
 
+  # Act
+  run --separate-stderr past stray
+
+  # Assert: what went wrong, then what to do next.
+  [[ "${stderr}" == $'past: unknown argument: stray\npast: see: past --help' ]]
+}
+
+# endregion Help and failures
 
 # region Constants
 
-@test "exit code constants match documented values" {
-  # Arrange / Act:
-  # the constants are populated when past.sh is sourced in setup().
+@test "the exit codes of past keep their documented values" {
+  # Arrange: setup sourced past.sh.
+
+  # Act: the constants are the input.
 
   # Assert
-  [ "$PAST_ERR_GENERAL" -eq 1 ]
-  [ "$PAST_ERR_USAGE" -eq 2 ]
-  [ "$PAST_ERR_NO_BACKEND" -eq 3 ]
-  [ "$PAST_ERR_BACKEND_FAILED" -eq 4 ]
-  [ "$PAST_ERR_TYPE_MISMATCH" -eq 5 ]
+  ((PAST_ERR_GENERAL == 1))
+  ((PAST_ERR_USAGE == 2))
+  ((PAST_ERR_NO_BACKEND == 3))
+  ((PAST_ERR_BACKEND_FAILED == 4))
+  ((PAST_ERR_TYPE_MISMATCH == 5))
+  ((PAST_ERR_INTERNAL == 70))
 }
 
-@test "constants survive re-sourcing (idempotency)" {
-  # Arrange / Act
-  run --separate-stderr __cp_run 'echo ok'
+@test "past.sh can be sourced twice in one shell" {
+  # Arrange: run_snippet sources past.sh, and the snippet sources it again,
+  # as a reload of ~/.bashrc does; a readonly constant must not fail.
+
+  # Act
+  run --separate-stderr run_snippet "source ${COPY_PAST_ROOT@Q}/past.sh && printf ok"
 
   # Assert
-  [ "$status" -eq 0 ]
-  [ "$output" = 'ok' ]
+  ((status == 0))
+  [[ "${output}" == 'ok' ]]
 }
 
-# endregion
+# endregion Constants
 
-### End of file
+### End

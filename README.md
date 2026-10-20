@@ -30,7 +30,7 @@ ls --color=always | copy        # ANSI codes stripped automatically
 | 🎨 **GUI-friendly** | ANSI escape codes stripped before writing |
 | 🤖 **Smart MIME detection** | Auto-recognises JSON (via `jq`) and PNG/JPEG/GIF/BMP/WebP |
 | 🔒 **Predictable** | Stable exit codes, well-defined error paths |
-| 🧪 **Hermetic test suite** | 90+ bats tests, no real clipboard touched in CI |
+| 🧪 **Hermetic test suite** | 250+ bats tests, no real clipboard touched in CI |
 | 📦 **Zero dependencies** | Plain Bash + your existing clipboard backend |
 
 ---
@@ -38,7 +38,7 @@ ls --color=always | copy        # ANSI codes stripped automatically
 ## Requirements
 
 * POSIX-like system (Linux, BSD, WSL with X/Wayland).
-* **Bash** 4.3 or newer.
+* **Bash** 4.4 or newer.
 * At least one clipboard backend:
   * Wayland: [`wl-clipboard`](https://github.com/bugaevc/wl-clipboard)
   * X11: `xclip` or `xsel`
@@ -162,6 +162,7 @@ and `--no-auto` disables it entirely.
 | `3`  | `COPY_ERR_NO_BACKEND`     | No suitable clipboard utility found.             |
 | `4`  | `COPY_ERR_BACKEND_FAILED` | Backend tool returned non-zero.                  |
 | `5`  | `COPY_ERR_TYPE_MISMATCH`  | Incompatible options or unsupported MIME type.   |
+| `70` | `COPY_ERR_INTERNAL`       | A bug in copy: please report it.                 |
 
 ### `past`: read from clipboard
 
@@ -191,6 +192,7 @@ Does not append a trailing newline beyond what is already there.
 | `3`  | `PAST_ERR_NO_BACKEND`     | No suitable clipboard utility found.             |
 | `4`  | `PAST_ERR_BACKEND_FAILED` | Backend tool returned non-zero.                  |
 | `5`  | `PAST_ERR_TYPE_MISMATCH`  | Backend cannot handle the requested MIME type.   |
+| `70` | `PAST_ERR_INTERNAL`       | A bug in past: please report it.                 |
 
 ---
 
@@ -272,7 +274,7 @@ alias cline='copy < /dev/stdin'
 
 ## Troubleshooting
 
-**No clipboard backend found**
+**`copy: no clipboard backend found`**
 Install one of `wl-clipboard`, `xclip`, or `xsel`,
 and make sure it is on `$PATH`.
 
@@ -308,22 +310,24 @@ Test layout:
 
 ```
 tests/
-├── support/test_helper.bash
+├── support/test_helper.bash      # loads fakes, clipboard, runners, debug_log
 ├── unit/
-│   ├── test_options.bats      # parsers, validate
-│   ├── test_mime.bats         # classify, sniff, apply, resolve
-│   ├── test_text.bats         # ANSI strip + whitespace trim
-│   ├── test_pipeline.bats     # buffer, prelude, stream
-│   └── test_debug_log.bats    # __cp_debug / __ps_debug
+│   ├── test_options.bats         # parsers, validate
+│   ├── test_mime.bats            # binary or text, sniff, apply, resolve
+│   ├── test_text.bats            # ANSI strip + whitespace trim
+│   ├── test_pipeline.bats        # buffer, prelude, stream
+│   ├── test_debug_log.bats       # __cp_debug / __ps_debug
+│   └── test_internal_error.bats  # the ERR trap of a program run
 └── integration/
-    ├── test_copy.bats         # copy options & error paths
-    ├── test_past.bats         # past options & error paths
-    ├── test_features.bats     # append / trim / json / image / auto-detect
-    ├── test_debug_flag.bats   # --debug end-to-end coverage
-    ├── test_backends.bats     # per-backend feature matrix
-    ├── test_roundtrip.bats    # copy → past byte fidelity
-    ├── test_regressions.bats  # historical bug-fix pins
-    └── test_code_style.bats   # shellcheck / shfmt / header gate
+    ├── test_program.bats         # copy.sh / past.sh run as programs
+    ├── test_copy.bats            # copy options & error paths
+    ├── test_past.bats            # past options & error paths
+    ├── test_features.bats        # append / trim / json / image / auto-detect
+    ├── test_debug_flag.bats      # --debug end-to-end coverage
+    ├── test_backends.bats        # per-backend feature matrix
+    ├── test_roundtrip.bats       # copy → past byte fidelity
+    ├── test_regressions.bats     # historical bug-fix pins
+    └── test_code_style.bats      # bash -n / shellcheck / shfmt / header card
 ```
 
 ---

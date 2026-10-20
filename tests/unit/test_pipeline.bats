@@ -1,158 +1,121 @@
 #!/usr/bin/env bats
 
-# Name: tests/unit/test_pipeline.bats
-# Author: Nikita Neverov (BMTLab)
-# License: MIT
-#
-# Description:
-#   Unit tests for the helpers that move bytes through copy()'s
-#   payload-shaping phases:
-#     - __cp_buffer_input        (stdin/argv into a temp file)
-#     - __cp_capture_prelude     (snapshot existing clipboard)
-#     - __cp_stream_with_prelude (concatenate prelude + stdin)
-#
-#   Each test follows the Arrange-Act-Assert (AAA) pattern.
-#
-# Disclaimer:
-#   This script is provided 'as is', without any warranty.
+# Tests the helpers that move the payload of copy.sh to the pipeline.
 
-bats_require_minimum_version 1.5.0
+bats_require_minimum_version 1.11.0
 
 load '../support/test_helper.bash'
 
-setup() {
-  __cp_setup_fake_backend
-  __cp_load_scripts
+function setup() {
+  setup_fake_backends
+  load_scripts
 }
-
 
 # region __cp_buffer_input
 
-@test "__cp_buffer_input captures piped stdin verbatim" {
+@test "__cp_buffer_input copies a piped stdin to the buffer" {
   # Arrange
-  local buffer=''
+  local buffer_path=''
 
   # Act
-  __cp_buffer_input buffer <<< 'piped content'
+  __cp_buffer_input buffer_path <<<'piped content'
 
-  # Assert
-  [ -f "$buffer" ]
-  # `<<<` adds a trailing newline; that is normal here-string behaviour.
-  [ "$(cat "$buffer")" = 'piped content' ]
-
-  # Cleanup
-  rm -f -- "$buffer"
+  # Assert: a here-string ends with a newline.
+  [[ "$(print_hex <"${buffer_path}")" == "$(printf 'piped content\n' | print_hex)" ]]
 }
 
-@test "__cp_buffer_input joins positional argv with single spaces" {
+@test "__cp_buffer_input joins the words of the text with spaces" {
   # Arrange:
-  # __cp_buffer_input checks `[[ ! -t 0 ]]` to decide between
-  # the pipe and argv branches. We need an argv-branch run,
-  # so we wrap the call in a real pty via __cp_run_with_tty.
-  # The pty wrapper translates LF to CRLF on stdout,
-  # so we sidestep that by writing the chosen buffer path
-  # to a file outside the pty, then read it from this test's shell.
-  local -r path_file="${BATS_TEST_TMPDIR}/argv.bufpath"
+  # argument mode needs a terminal as stdin, so the call runs in one.
+  # The terminal turns LF into CRLF,
+  # so the path of the buffer comes back through a file.
+  local -r path_file="${BATS_TEST_TMPDIR}/buffer-path"
+  local buffer_path
 
   # Act
-  __cp_run_with_tty "
-    source '${COPY_PAST_ROOT}/copy.sh'
-    buf=''
-    __cp_buffer_input buf first second third
-    printf '%s' \"\$buf\" > '${path_file}'
+  run_in_terminal "
+    $(print_snippet_prelude copy.sh)
+    buffer_path=''
+    __cp_buffer_input buffer_path first second third
+    printf '%s' \"\${buffer_path}\" >${path_file@Q}
   " >/dev/null
 
   # Assert
-  local -r buffer_path="$(< "$path_file")"
-  [ -f "$buffer_path" ]
-  # `echo "$*"` emits a trailing newline, so we strip it before compare.
-  [ "$(cat "$buffer_path")" = 'first second third' ]
-
-  # Cleanup
-  rm -f -- "$buffer_path"
+  buffer_path="$(<"${path_file}")"
+  [[ "$(<"${buffer_path}")" == 'first second third' ]]
 }
 
-@test "__cp_buffer_input fails with COPY_ERR_USAGE on no input at all" {
-  # Arrange / Act:
-  # use the pty wrapper to simulate a tty stdin
-  # AND no positional arguments.
-  run --separate-stderr __cp_run_with_tty "
-    source '${COPY_PAST_ROOT}/copy.sh'
-    buf=''
-    __cp_buffer_input buf
-    echo \"rc=\$?\"
+@test "__cp_buffer_input refuses no input at all with the usage code" {
+  # Arrange: a terminal as stdin, and no words.
+
+  # Act
+  run --separate-stderr run_in_terminal "
+    $(print_snippet_prelude copy.sh)
+    buffer_path=''
+    code=0
+    __cp_buffer_input buffer_path || code=\$?
+    printf 'code=%s\n' \"\${code}\"
   "
 
   # Assert
-  echo "$output" | grep -q "rc=${COPY_ERR_USAGE}"
+  [[ "${output}" == *"code=${COPY_ERR_USAGE}"* ]]
 }
 
-# endregion
-
+# endregion __cp_buffer_input
 
 # region __cp_capture_prelude
 
-@test "__cp_capture_prelude no-ops when --append is off" {
-  # Arrange
-  local prelude='dirty'
+@test "__cp_capture_prelude saves nothing without --append" {
+  # Arrange: a path from before must be cleared.
+  local prelude_path='dirty'
 
   # Act
-  __cp_capture_prelude prelude 0
+  __cp_capture_prelude prelude_path 0
 
   # Assert
-  [ "$prelude" = '' ]
+  [[ -z "${prelude_path}" ]]
 }
 
-@test "__cp_capture_prelude snapshots clipboard into a temp file" {
+@test "__cp_capture_prelude saves the clipboard in a file" {
   # Arrange
-  __cp_clipboard_set 'existing buffer'
-  local prelude=''
+  local prelude_path=''
+  set_clipboard 'existing buffer'
 
   # Act
-  __cp_capture_prelude prelude 1
+  __cp_capture_prelude prelude_path 1
 
   # Assert
-  [ -f "$prelude" ]
-  [ "$(cat "$prelude")" = 'existing buffer' ]
-
-  # Cleanup
-  rm -f -- "$prelude"
+  [[ "$(<"${prelude_path}")" == 'existing buffer' ]]
 }
 
-# endregion
-
+# endregion __cp_capture_prelude
 
 # region __cp_stream_with_prelude
 
-@test "__cp_stream_with_prelude with empty path acts as cat" {
+@test "__cp_stream_with_prelude prints stdin alone without a saved clipboard" {
   # Arrange
-  local -r expected='just stdin'
+  local streamed
 
   # Act
-  local got
-  got="$(printf '%s' "$expected" | __cp_stream_with_prelude '')"
+  streamed="$(printf '%s' 'just stdin' | __cp_stream_with_prelude '')"
 
   # Assert
-  [ "$got" = "$expected" ]
+  [[ "${streamed}" == 'just stdin' ]]
 }
 
-@test "__cp_stream_with_prelude prefixes prelude before stdin" {
+@test "__cp_stream_with_prelude prints the saved clipboard before stdin" {
   # Arrange
-  local prelude_path
-  prelude_path="$(mktemp -p "$BATS_TEST_TMPDIR")"
-  printf '%s' 'OLD-' > "$prelude_path"
+  local -r prelude_path="${BATS_TEST_TMPDIR}/prelude"
+  local streamed
+  printf '%s' 'OLD-' >"${prelude_path}"
 
   # Act
-  local got
-  got="$(printf '%s' 'NEW' | __cp_stream_with_prelude "$prelude_path")"
+  streamed="$(printf '%s' 'NEW' | __cp_stream_with_prelude "${prelude_path}")"
 
   # Assert
-  [ "$got" = 'OLD-NEW' ]
-
-  # Cleanup
-  rm -f -- "$prelude_path"
+  [[ "${streamed}" == 'OLD-NEW' ]]
 }
 
-# endregion
+# endregion __cp_stream_with_prelude
 
-### End of file
+### End

@@ -12,6 +12,7 @@
 PROJECT_NAME    := copy-past
 PROJECT_VERSION := $(shell awk '/^# Version: [0-9]+\.[0-9]+\.[0-9]+/ { print $$3; exit }' copy.sh)
 SCRIPTS         := copy.sh past.sh
+TEST_FILES      := $(wildcard tests/support/*.bash tests/*/*.bats)
 
 
 # ─── Install configuration ───────────────────────────────────────────────
@@ -34,7 +35,8 @@ SHFMT       ?= shfmt
 INSTALL_BIN ?= install
 
 SHFMT_FLAGS      := -i 2 -ci -bn
-SHELLCHECK_FLAGS := -S warning -e SC2155
+# .shellcheckrc holds the rules of shellcheck, for make, CI and editors alike.
+SHELLCHECK_FLAGS :=
 
 
 # ─── Platform detection ──────────────────────────────────────────────────
@@ -212,19 +214,19 @@ check-deps:  ## Check runtime + dev tooling availability
 # Quality
 # ════════════════════════════════════════════════════════════════════════
 
-lint:  ## Run shellcheck on copy.sh / past.sh
+lint:  ## Run shellcheck on the scripts and the tests
 	$(call log_step,'shellcheck')
-	@$(SHELLCHECK) $(SHELLCHECK_FLAGS) $(SCRIPTS)
+	@$(SHELLCHECK) $(SHELLCHECK_FLAGS) $(SCRIPTS) $(TEST_FILES)
 	$(call log_ok,'shellcheck clean')
 
 format:  ## Apply shfmt formatting in-place
 	$(call log_step,'shfmt -w')
-	@$(SHFMT) $(SHFMT_FLAGS) -w $(SCRIPTS)
+	@$(SHFMT) $(SHFMT_FLAGS) -w $(SCRIPTS) $(TEST_FILES)
 	$(call log_ok,'formatted')
 
 format-check:  ## Verify shfmt formatting without writing
 	$(call log_step,'shfmt -d')
-	@if ! $(SHFMT) $(SHFMT_FLAGS) -d $(SCRIPTS); then \
+	@if ! $(SHFMT) $(SHFMT_FLAGS) -d $(SCRIPTS) $(TEST_FILES); then \
 		printf '  $(C_RED)✗$(C_RESET) shfmt diff detected (run `make format`)\n' >&2; \
 		exit 1; \
 	fi

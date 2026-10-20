@@ -1,326 +1,278 @@
 #!/usr/bin/env bats
 
-# Name: tests/integration/test_backends.bats
-# Author: Nikita Neverov (BMTLab)
-# License: MIT
+# Tests what each clipboard backend can do, as the README matrix promises.
 #
-# Description:
-#   Backend support matrix for copy-past.
+#   | Feature               | wl-clipboard | xclip | xsel |
+#   | --------------------- | :----------: | :---: | :--: |
+#   | plain text round trip |      yes     |  yes  |  yes |
+#   | --type MIME           |      yes     |  yes  |  no  |
+#   | --json (text MIME)    |      yes     |  yes  |  no  |
+#   | --image (binary MIME) |      yes     |  yes  |  no  |
+#   | newline fix of past   |      yes     |  no   |  no  |
 #
-#   Different clipboard backends expose different capabilities:
-#
-#     | Feature              | wl-clipboard | xclip | xsel |
-#     | -------------------- | :----------: | :---: | :--: |
-#     | plain text round-trip|      yes     |  yes  |  yes |
-#     | --type MIME forward  |      yes     |  yes  |  no  |
-#     | --json (text MIME)   |      yes     |  yes  |  no  |
-#     | --image (binary MIME)|      yes     |  yes  |  no  |
-#     | wl-paste \n quirk    |      yes     |  no   |  no  |
-#
-#   This file is the executable form of that matrix.
-#   When a backend acquires (or loses) a capability,
-#   the table above and the corresponding test must change together.
-#
-#   Backend selection is always explicit via COPY_PAST_BACKEND,
-#   so the tests are deterministic regardless of the host:
-#   the fake backends supplied by tests/support/fakes.bash provide
-#   real wl-copy / wl-paste / xclip / xsel binaries on $PATH.
-#
-#   Each test follows the Arrange-Act-Assert (AAA) pattern.
-#
-# Disclaimer:
-#   This script is provided 'as is', without any warranty.
+# COPY_PAST_BACKEND picks each backend, so the host does not matter.
 
-bats_require_minimum_version 1.5.0
+bats_require_minimum_version 1.11.0
 
 load '../support/test_helper.bash'
 
-setup() {
-  __cp_setup_fake_backend
-  __cp_load_scripts
-  __cp_enable_xclip_fake
-  __cp_enable_xsel_fake
+function setup() {
+  setup_fake_backends
+  load_scripts
+  enable_fake_xclip
+  enable_fake_xsel
 }
 
+# region COPY_PAST_BACKEND
 
-# region Override knob: COPY_PAST_BACKEND selects the backend
+#######################################
+# Check that a value of COPY_PAST_BACKEND picks its backend for copy.
+#
+# Arguments:
+#   1: The value of COPY_PAST_BACKEND.
+#   2: The backend command expected.
+#######################################
+function backend_value_picks_its_backend() {
+  # Arrange
+  local -r backend_value="$1"
+  local -r expected_backend="$2"
+  local -r payload="via ${backend_value}"
 
-@test "COPY_PAST_BACKEND picks the documented backend (every value)" {
-  # Arrange:
-  # rows are 'env-value|expected-backend|payload'.
-  # The matrix below mirrors the case-statement in __cp_detect_backend.
-  local -ra cases=(
-    'wl-clipboard|wl-copy|via wl'
-    'wayland|wl-copy|via wayland alias'
-    'wl-copy|wl-copy|via wl-copy alias'
-    'xclip|xclip|via xclip'
-    'xsel|xsel|via xsel'
-  )
+  # Act
+  run --separate-stderr run_snippet "
+    export COPY_PAST_BACKEND=${backend_value@Q}
+    printf '%s' ${payload@Q} | copy --debug
+  "
 
-  local row env_value expected_backend payload
-  for row in "${cases[@]}"; do
-    env_value="${row%%|*}"
-    local rest="${row#*|}"
-    expected_backend="${rest%%|*}"
-    payload="${rest#*|}"
-
-    # Reset the clipboard so a previous row cannot leak into this one.
-    __cp_clipboard_set ''
-
-    # Act
-    run --separate-stderr bash -c "
-      export COPY_PAST_BACKEND='${env_value}'
-      source '${COPY_PAST_ROOT}/copy.sh'
-      printf '%s' '${payload}' | copy --debug
-    "
-
-    # Assert
-    [ "$status" -eq 0 ] || {
-      printf 'env=%s status=%d\n' "$env_value" "$status" >&2
-      false
-    }
-    __cp_assert_debug_event 'backend-resolved' \
-      "backend=${expected_backend}"
-    [ "$(__cp_clipboard_dump)" = "$payload" ] || {
-      printf 'env=%s clipboard mismatch: got %q\n' \
-        "$env_value" "$(__cp_clipboard_dump)" >&2
-      false
-    }
-  done
+  # Assert
+  ((status == 0))
+  assert_debug_event 'backend-resolved' "backend=${expected_backend}"
+  [[ "$(print_clipboard)" == "${payload}" ]]
 }
 
-@test "COPY_PAST_BACKEND=bogus is a usage error on copy and past" {
-  # Arrange / Act (copy)
-  run --separate-stderr bash -c "
+# Samples: "value|backend"; wayland and wl-copy name wl-clipboard too.
+BACKEND_VALUES=(
+  'wl-clipboard|wl-copy'
+  'wayland|wl-copy'
+  'wl-copy|wl-copy'
+  'xclip|xclip'
+  'xsel|xsel'
+)
+
+for backend_sample in "${BACKEND_VALUES[@]}"; do
+  bats_test_function \
+    --description "COPY_PAST_BACKEND=${backend_sample%%|*} makes copy run ${backend_sample#*|}" \
+    -- backend_value_picks_its_backend "${backend_sample%%|*}" "${backend_sample#*|}"
+done
+
+@test "COPY_PAST_BACKEND=bogus is a usage error for copy" {
+  # Arrange: bogus names no backend.
+
+  # Act
+  run --separate-stderr run_snippet "
     export COPY_PAST_BACKEND=bogus
-    source '${COPY_PAST_ROOT}/copy.sh'
     printf '%s' 'x' | copy --no-auto
   "
 
-  # Assert (copy)
-  [ "$status" -eq "$COPY_ERR_USAGE" ]
-  [[ "$stderr" == *'Unknown COPY_PAST_BACKEND'* ]]
+  # Assert
+  ((status == COPY_ERR_USAGE))
+  [[ "${stderr}" == *'unknown COPY_PAST_BACKEND'* ]]
+}
 
-  # Act (past)
-  run --separate-stderr bash -c "
+@test "COPY_PAST_BACKEND=bogus is a usage error for past" {
+  # Arrange: bogus names no backend.
+
+  # Act
+  run --separate-stderr run_snippet '
     export COPY_PAST_BACKEND=bogus
-    source '${COPY_PAST_ROOT}/past.sh'
+    past
+  '
+
+  # Assert
+  ((status == PAST_ERR_USAGE))
+  [[ "${stderr}" == *'unknown COPY_PAST_BACKEND'* ]]
+}
+
+@test "COPY_PAST_BACKEND=xclip without xclip reports a missing backend" {
+  # Arrange:
+  # PATH holds only the fakes, without xclip,
+  # so an xclip of the host cannot answer for the fake.
+  local prelude bash_path
+  prelude="$(print_snippet_prelude copy.sh)"
+  bash_path="$(command -v bash)"
+  rm -f -- "${FAKE_BIN}/xclip"
+
+  # Act
+  run --separate-stderr env -i HOME="${HOME}" PATH="${FAKE_BIN}" \
+    COPY_PAST_BACKEND=xclip \
+    "${bash_path}" -c "${prelude}"$'\n'"printf '%s' 'x' | copy"
+
+  # Assert
+  ((status == COPY_ERR_NO_BACKEND))
+  [[ "${stderr}" == *'no clipboard backend found'* ]]
+}
+
+# endregion COPY_PAST_BACKEND
+
+# region Plain text, on every backend
+
+#######################################
+# Check that a backend makes a round trip of plain text:
+# all fakes share one clipboard file.
+#
+# Arguments:
+#   1: The value of COPY_PAST_BACKEND.
+#######################################
+function backend_round_trips_plain_text() {
+  # Arrange
+  local -r backend_value="$1"
+  local -r payload="round-trip-${backend_value}"
+
+  # Act
+  run --separate-stderr run_snippet "
+    export COPY_PAST_BACKEND=${backend_value@Q}
+    printf '%s' ${payload@Q} | copy
     past
   "
 
-  # Assert (past)
-  [ "$status" -eq "$PAST_ERR_USAGE" ]
-  [[ "$stderr" == *'Unknown COPY_PAST_BACKEND'* ]]
+  # Assert
+  ((status == 0))
+  [[ "${output}" == "${payload}" ]]
 }
 
-@test "COPY_PAST_BACKEND=xclip without xclip on PATH reports no-backend" {
+for backend_name in wl-clipboard xclip xsel; do
+  bats_test_function \
+    --description "${backend_name} makes a round trip of plain text" \
+    -- backend_round_trips_plain_text "${backend_name}"
+done
+
+# endregion Plain text, on every backend
+
+# region MIME types, on wl-clipboard and xclip
+
+#######################################
+# Check that a backend with MIME types takes a MIME flag of copy.
+#
+# Arguments:
+#   1: The value of COPY_PAST_BACKEND.
+#   2: The flag: --json or --image.
+#   3: The MIME type expected.
+#######################################
+function backend_takes_a_mime_flag() {
   # Arrange:
-  # explicitly remove the xclip fake AND restrict PATH to FAKE_BIN
-  # only, so a system-installed xclip on the runner cannot satisfy
-  # the override. Without the PATH restriction this test was a
-  # tautology: it passed locally only because the developer's box
-  # happened to lack xclip on $PATH.
-  rm -f "${FAKE_BIN}/xclip"
-  local bash_bin
-  bash_bin="$(command -v bash)"
+  # an explicit flag decides the MIME type, so the payload does not matter.
+  local -r backend_value="$1"
+  local -r flag="$2"
+  local -r expected_mime="$3"
 
   # Act
-  run --separate-stderr env -i \
-    HOME="$HOME" \
-    PATH="${FAKE_BIN}" \
-    COPY_PAST_BACKEND=xclip \
-    "$bash_bin" -c "
-      source '${COPY_PAST_ROOT}/copy.sh'
-      printf '%s' 'x' | copy
-    "
+  run --separate-stderr run_snippet "
+    export COPY_PAST_BACKEND=${backend_value@Q}
+    printf '%s' '{\"k\":1}' | copy --debug ${flag}
+  "
 
   # Assert
-  [ "$status" -eq "$COPY_ERR_NO_BACKEND" ]
-  [[ "$stderr" == *'No clipboard backend found'* ]]
+  ((status == 0))
+  assert_debug_event 'options-parsed' "mime=${expected_mime}"
 }
 
-# endregion
+for backend_name in wl-clipboard xclip; do
+  bats_test_function --description "${backend_name} takes copy --json" \
+    -- backend_takes_a_mime_flag "${backend_name}" --json application/json
+  bats_test_function --description "${backend_name} takes copy --image" \
+    -- backend_takes_a_mime_flag "${backend_name}" --image image/png
+done
 
+# endregion MIME types, on wl-clipboard and xclip
 
-# region Plain text round-trip (every backend supports this)
+# region No MIME types on xsel
 
-@test "every supported backend round-trips plain text" {
-  # Arrange:
-  # one row per backend -> all three pairs of fakes share the same
-  # clipboard file, so a successful round-trip proves
-  # the (backend, copy/past) wiring is correct.
-  local -ra backends=(wl-clipboard xclip xsel)
-  local backend payload
+#######################################
+# Check that xsel refuses a MIME flag of copy with the type-mismatch code.
+#
+# Arguments:
+#   1: The flag: --json or --image.
+#######################################
+function xsel_refuses_a_copy_mime_flag() {
+  # Arrange
+  local -r flag="$1"
 
-  for backend in "${backends[@]}"; do
-    # Reset the clipboard for a clean per-backend assertion.
-    __cp_clipboard_set ''
-    payload="round-trip-${backend}"
-
-    # Act
-    run --separate-stderr bash -c "
-      export COPY_PAST_BACKEND='${backend}'
-      source '${COPY_PAST_ROOT}/copy.sh'
-      source '${COPY_PAST_ROOT}/past.sh'
-      printf '%s' '${payload}' | copy
-      past
-    "
-
-    # Assert
-    [ "$status" -eq 0 ] || {
-      printf 'backend=%s status=%d\n' "$backend" "$status" >&2
-      false
-    }
-    [ "$output" = "$payload" ] || {
-      printf 'backend=%s mismatch: got %q\n' \
-        "$backend" "$output" >&2
-      false
-    }
-  done
-}
-
-# endregion
-
-
-# region MIME-aware backends accept --json and --image
-
-@test "wl-clipboard and xclip accept --json and --image (no TYPE_MISMATCH)" {
-  # Arrange:
-  # rows are 'backend|flag|expected-mime'.
-  # Only backends that actually support MIME are listed; the xsel
-  # rejection is covered in its own test below.
-  local -ra cases=(
-    'wl-clipboard|--json|application/json'
-    'wl-clipboard|--image|image/png'
-    'xclip|--json|application/json'
-    'xclip|--image|image/png'
-  )
-
-  local row backend flag expected_mime
-  for row in "${cases[@]}"; do
-    backend="${row%%|*}"
-    local rest="${row#*|}"
-    flag="${rest%%|*}"
-    expected_mime="${rest#*|}"
-
-    __cp_clipboard_set ''
-
-    # Act:
-    # --image needs binary input that cannot be JSON, otherwise
-    # auto-detection on the JSON case would still pick it up via jq.
-    # We pass an explicit MIME flag in both rows, so the input
-    # itself does not matter for this assertion.
-    run --separate-stderr bash -c "
-      export COPY_PAST_BACKEND='${backend}'
-      source '${COPY_PAST_ROOT}/copy.sh'
-      printf '%s' '{\"k\":1}' | copy --debug ${flag}
-    "
-
-    # Assert
-    [ "$status" -eq 0 ] || {
-      printf 'backend=%s flag=%s status=%d\n' \
-        "$backend" "$flag" "$status" >&2
-      printf 'stderr: %s\n' "$stderr" >&2
-      false
-    }
-    __cp_assert_debug_event 'options-parsed' \
-      "mime=${expected_mime}"
-  done
-}
-
-# endregion
-
-
-# region xsel rejects every MIME-aware feature
-
-@test "xsel rejects --json, --image, and past --type with TYPE_MISMATCH" {
-  # Arrange:
-  # rows are 'flag-set|expected-error-substring'.
-  # The shared exit code is 5 (COPY_ERR_TYPE_MISMATCH /
-  # PAST_ERR_TYPE_MISMATCH), with the same human-readable hint
-  # mentioning xsel's MIME limitation.
-  local -ra copy_cases=(
-    '--json'
-    '--image'
-  )
-
-  local flags
-  for flags in "${copy_cases[@]}"; do
-    # Act
-    run --separate-stderr bash -c "
-      export COPY_PAST_BACKEND=xsel
-      source '${COPY_PAST_ROOT}/copy.sh'
-      printf '%s' 'x' | copy ${flags}
-    "
-
-    # Assert
-    [ "$status" -eq "$COPY_ERR_TYPE_MISMATCH" ] || {
-      printf 'flags=%s status=%d\n' "$flags" "$status" >&2
-      false
-    }
-    [[ "$stderr" == *'xsel does not support MIME types'* ]] || {
-      printf 'flags=%s stderr did not mention xsel: %s\n' \
-        "$flags" "$stderr" >&2
-      false
-    }
-  done
-
-  # Also covers past --type with the same backend.
-  __cp_clipboard_set 'data'
-  run --separate-stderr bash -c "
+  # Act
+  run --separate-stderr run_snippet "
     export COPY_PAST_BACKEND=xsel
-    source '${COPY_PAST_ROOT}/past.sh'
-    past --type application/json
+    printf '%s' 'x' | copy ${flag}
   "
-  [ "$status" -eq "$PAST_ERR_TYPE_MISMATCH" ]
-  [[ "$stderr" == *'xsel does not support MIME types'* ]]
+
+  # Assert
+  ((status == COPY_ERR_TYPE_MISMATCH))
+  [[ "${stderr}" == *'xsel does not support MIME types'* ]]
 }
 
-# endregion
+for flag_name in --json --image; do
+  bats_test_function --description "xsel refuses copy ${flag_name}" \
+    -- xsel_refuses_a_copy_mime_flag "${flag_name}"
+done
 
+@test "xsel refuses past --type with the type-mismatch code" {
+  # Arrange
+  set_clipboard 'data'
 
-# region wl-paste-only quirk (trailing-newline workaround)
+  # Act
+  run --separate-stderr run_snippet '
+    export COPY_PAST_BACKEND=xsel
+    past --type application/json
+  '
 
-@test "past read-strategy depends on backend AND payload kind" {
+  # Assert
+  ((status == PAST_ERR_TYPE_MISMATCH))
+  [[ "${stderr}" == *'xsel does not support MIME types'* ]]
+}
+
+# endregion No MIME types on xsel
+
+# region The newline fix of wl-paste
+
+#######################################
+# Check how past reads: wl-paste with a text type needs the newline fix,
+# while wl-paste with a binary type, xclip and xsel run as they are.
+#
+# Arguments:
+#   1: The value of COPY_PAST_BACKEND.
+#   2: The way of reading expected, as the debug log names it.
+#   3...: The options of past.
+#######################################
+function past_reads_the_way_of_its_backend() {
   # Arrange:
-  # rows are 'backend|past-flags|expected-strategy'.
-  # The matrix encodes the routing rule in __ps_emit_clipboard:
-  #   - wl-paste + text MIME -> newline-strip (workaround)
-  #   - wl-paste + binary MIME -> direct-exec (preserve NULs)
-  #   - xclip / xsel -> always direct-exec (no quirk to undo)
-  __cp_clipboard_set 'placeholder'
-  local -ra cases=(
-    'wl-clipboard||wl-paste-newline-strip'
-    'wl-clipboard|--image|direct-exec'
-    'xclip||direct-exec'
-    'xsel||direct-exec'
-  )
+  # stdout goes away, so binary output stays out of the test log.
+  local -r backend_value="$1"
+  local -r expected_mode="$2"
+  local -r flags="${*:3}"
+  set_clipboard 'placeholder'
 
-  local row backend flags expected
-  for row in "${cases[@]}"; do
-    backend="${row%%|*}"
-    local rest="${row#*|}"
-    flags="${rest%%|*}"
-    expected="${rest#*|}"
+  # Act
+  run --separate-stderr run_snippet "
+    export COPY_PAST_BACKEND=${backend_value@Q}
+    past --debug ${flags} >/dev/null
+  "
 
-    # Act:
-    # discard stdout so binary MIME read does not pollute test output.
-    run --separate-stderr bash -c "
-      export COPY_PAST_BACKEND='${backend}'
-      source '${COPY_PAST_ROOT}/past.sh'
-      past --debug ${flags} > /dev/null
-    "
-
-    # Assert
-    [ "$status" -eq 0 ] || {
-      printf 'backend=%s flags=%q status=%d\n' \
-        "$backend" "$flags" "$status" >&2
-      false
-    }
-    __cp_assert_debug_event 'read-strategy' "mode=${expected}"
-  done
+  # Assert
+  ((status == 0))
+  assert_debug_event 'read-strategy' "mode=${expected_mode}"
 }
 
-# endregion
+bats_test_function \
+  --description "past fixes the newline of wl-paste for text" \
+  -- past_reads_the_way_of_its_backend wl-clipboard wl-paste-newline-strip
+bats_test_function \
+  --description "past runs wl-paste as it is for an image" \
+  -- past_reads_the_way_of_its_backend wl-clipboard direct-exec --image
+bats_test_function \
+  --description "past runs xclip as it is" \
+  -- past_reads_the_way_of_its_backend xclip direct-exec
+bats_test_function \
+  --description "past runs xsel as it is" \
+  -- past_reads_the_way_of_its_backend xsel direct-exec
 
-### End of file
+# endregion The newline fix of wl-paste
+
+### End

@@ -1,0 +1,23 @@
+# .shellcheckrc
+#
+# One source of lint truth for `make lint`, CI and editor plugins.
+# ShellCheck reads only the nearest .shellcheckrc above each file:
+# tests/.shellcheckrc repeats these rules with the exceptions of the suite.
+
+shell=bash
+
+# Follow `source` statements with a `# shellcheck source=` hint,
+# resolving the hint against the directory of the sourcing file.
+external-sources=true
+source-path=SCRIPTDIR
+
+# Optional checks that catch real mistakes in this codebase.
+enable=avoid-nullary-conditions
+enable=check-unassigned-uppercase
+enable=deprecate-which
+enable=require-double-brackets
+
+# Braces around every variable and quotes around every expansion,
+# so the code reads the same everywhere.
+enable=require-variable-braces
+enable=quote-safe-variables

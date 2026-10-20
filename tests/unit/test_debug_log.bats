@@ -1,94 +1,66 @@
 #!/usr/bin/env bats
 
-# Name: tests/unit/test_debug_log.bats
-# Author: Nikita Neverov (BMTLab)
-# License: MIT
-#
-# Description:
-#   Unit tests for the debug-logging helpers:
-#     - __cp_debug
-#     - __ps_debug
-#
-#   These tests pin the exact line format
-#   ('[copy debug] event=NAME k1=v1 k2=v2'),
-#   because that format is the project's stable contract
-#   for downstream tooling and integration tests
-#   that parse the log to assert internal decisions.
-#
-#   Each test follows the Arrange-Act-Assert (AAA) pattern.
-#
-# Disclaimer:
-#   This script is provided 'as is', without any warranty.
+# Tests the format of the debug log that copy.sh and past.sh print.
 
-bats_require_minimum_version 1.5.0
+bats_require_minimum_version 1.11.0
 
 load '../support/test_helper.bash'
 
-setup() {
-  __cp_setup_fake_backend
-  __cp_load_scripts
+function setup() {
+  setup_fake_backends
+  load_scripts
 }
 
+@test "__cp_debug prints nothing when the log is off" {
+  # Arrange: 0 turns the log off.
 
-# region Silence by default
-
-@test "__cp_debug is a no-op when debug_mode=0" {
-  # Arrange / Act
-  local stderr_out
-  stderr_out="$(__cp_debug 0 'should-not-fire' 'key=value' 2>&1 1>/dev/null)"
+  # Act
+  run --separate-stderr __cp_debug 0 'should-not-fire' 'key=value'
 
   # Assert
-  [ -z "$stderr_out" ]
+  ((status == 0))
+  [[ -z "${stderr}" ]]
+  [[ -z "${output}" ]]
 }
 
-# endregion
+@test "__cp_debug prints the event and its fields on one line" {
+  # Arrange: 1 turns the log on.
 
-
-# region Line format
-
-@test "__cp_debug emits a single structured line when debug_mode=1" {
-  # Arrange / Act
-  local stderr_out
-  stderr_out="$(__cp_debug 1 'sample' 'k1=v1' 'k2=v2' 2>&1 1>/dev/null)"
-
-  # Assert:
-  # exact line layout, including the [copy debug] prefix.
-  [ "$stderr_out" = '[copy debug] event=sample k1=v1 k2=v2' ]
-}
-
-@test "__cp_debug quotes values that contain whitespace" {
-  # Arrange / Act
-  local stderr_out
-  stderr_out="$(
-    __cp_debug 1 'spacy' 'plain=ok' 'with-space=hello world' \
-      2>&1 1>/dev/null
-  )"
-
-  # Assert:
-  # plain values stay bare;
-  # whitespace-bearing values are wrapped in single quotes.
-  [[ "$stderr_out" == *'plain=ok'* ]]
-  [[ "$stderr_out" == *"with-space='hello world'"* ]]
-}
-
-@test "__cp_debug emits a bare event line when no key=value pairs follow" {
-  # Arrange / Act
-  local stderr_out
-  stderr_out="$(__cp_debug 1 'lone-event' 2>&1 1>/dev/null)"
+  # Act
+  run --separate-stderr __cp_debug 1 'sample' 'k1=v1' 'k2=v2'
 
   # Assert
-  [ "$stderr_out" = '[copy debug] event=lone-event' ]
+  [[ "${stderr}" == '[copy debug] event=sample k1=v1 k2=v2' ]]
 }
 
-@test "__ps_debug uses the [past debug] prefix" {
-  # Arrange / Act
-  local stderr_out
-  stderr_out="$(__ps_debug 1 'p-event' 'k=v' 2>&1 1>/dev/null)"
+@test "__cp_debug quotes a value that holds whitespace" {
+  # Arrange: one plain value, one with a space.
+
+  # Act
+  run --separate-stderr __cp_debug 1 'spacy' 'plain=ok' 'with-space=hello world'
 
   # Assert
-  [ "$stderr_out" = '[past debug] event=p-event k=v' ]
+  [[ "${stderr}" == "[copy debug] event=spacy plain=ok with-space='hello world'" ]]
 }
 
-# endregion
+@test "__cp_debug prints a bare event when no field follows" {
+  # Arrange: the event alone.
 
-### End of file
+  # Act
+  run --separate-stderr __cp_debug 1 'lone-event'
+
+  # Assert
+  [[ "${stderr}" == '[copy debug] event=lone-event' ]]
+}
+
+@test "__ps_debug prints the prefix of past" {
+  # Arrange: 1 turns the log on.
+
+  # Act
+  run --separate-stderr __ps_debug 1 'p-event' 'k=v'
+
+  # Assert
+  [[ "${stderr}" == '[past debug] event=p-event k=v' ]]
+}
+
+### End

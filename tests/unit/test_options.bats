@@ -1,412 +1,479 @@
 #!/usr/bin/env bats
 
-# Name: tests/unit/test_options.bats
-# Author: Nikita Neverov (BMTLab)
-# License: MIT
-#
-# Description:
-#   Unit tests for option-handling helpers in copy.sh and past.sh:
-#     - __cp_init_options / __ps_init_options
-#     - __cp_parse_args   / __ps_parse_args
-#     - __cp_parse_type_flag  / __ps_parse_type_flag
-#     - __cp_parse_image_flag / __ps_parse_image_flag
-#     - __cp_validate_options
-#
-#   These functions are pure
-#   (no clipboard touch, no pipeline composition),
-#   so they can be tested in isolation by passing namerefs in
-#   and inspecting their effect on the caller's state.
-#
-#   Each test follows the Arrange-Act-Assert (AAA) pattern.
-#
-# Disclaimer:
-#   This script is provided 'as is', without any warranty.
+# Tests how copy.sh and past.sh read and check their options.
 
-bats_require_minimum_version 1.5.0
+bats_require_minimum_version 1.11.0
 
 load '../support/test_helper.bash'
 
-setup() {
-  __cp_setup_fake_backend
-  __cp_load_scripts
+function setup() {
+  setup_fake_backends
+  load_scripts
 }
-
 
 # region Defaults
 
-@test "__cp_init_options resets every flag to its default value" {
+@test "__cp_init_options sets every option of copy to its default" {
+  # Arrange: every option starts with a wrong value.
+  local -A options=(
+    ['is_raw']=9 ['should_trim']=9 ['should_append']=9
+    ['should_detect_mime']=9 ['is_debug']=9 ['should_show_help']=9
+    ['mime_type']='dirty'
+  )
+
+  # Act
+  __cp_init_options options
+
+  # Assert
+  ((options['is_raw'] == 0))
+  ((options['should_trim'] == 0))
+  ((options['should_append'] == 0))
+  ((options['should_detect_mime'] == 1))
+  ((options['is_debug'] == 0))
+  ((options['should_show_help'] == 0))
+  [[ -z "${options['mime_type']}" ]]
+}
+
+@test "__ps_init_options sets every option of past to its default" {
+  # Arrange
+  local -A options=(
+    ['is_debug']=9 ['should_show_help']=9 ['mime_type']='dirty'
+  )
+
+  # Act
+  __ps_init_options options
+
+  # Assert
+  ((options['is_debug'] == 0))
+  ((options['should_show_help'] == 0))
+  [[ -z "${options['mime_type']}" ]]
+}
+
+# endregion Defaults
+
+# region --type
+
+#######################################
+# Check that a --type flag gives its MIME type
+# and uses the right number of arguments.
+#
+# Arguments:
+#   1: The parser: __cp_parse_type_flag or __ps_parse_type_flag.
+#   2: The MIME type expected.
+#   3: How many arguments the flag uses.
+#   4...: The flag, and the argument after it, if any.
+#######################################
+function type_flag_gives_its_mime_type() {
+  # Arrange: the flag and its argument are the input.
+  local -r parser="$1"
+  local -r expected_mime="$2"
+  local -ir expected_count="$3"
+  local -A options=(['mime_type']='')
+  local -i used_count=0
+  shift 3
+
+  # Act
+  "${parser}" options used_count "$@"
+
+  # Assert
+  [[ "${options['mime_type']}" == "${expected_mime}" ]]
+  ((used_count == expected_count))
+}
+
+#######################################
+# Check that a --type flag without a MIME type is a usage error.
+#
+# Arguments:
+#   1: The parser: __cp_parse_type_flag or __ps_parse_type_flag.
+#   2: The name of the usage code, COPY_ERR_USAGE or PAST_ERR_USAGE.
+#   3...: The flag, and the argument after it, if any.
+#######################################
+function type_flag_refuses_an_empty_mime_type() {
+  # Arrange
+  local -r parser="$1"
+  local -r usage_code_name="$2"
+  local -ir usage_code="${!usage_code_name}"
+  local -A options=(['mime_type']='')
+  local -i used_count=0
+  shift 2
+
+  # Act
+  run --separate-stderr "${parser}" options used_count "$@"
+
+  # Assert
+  ((status == usage_code))
+  [[ "${stderr}" == *'--type requires a MIME type'* ]]
+}
+
+for tool_prefix in cp:COPY ps:PAST; do
+  parser_name="__${tool_prefix%%:*}_parse_type_flag"
+  usage_name="${tool_prefix#*:}_ERR_USAGE"
+  bats_test_function \
+    --description "${parser_name} reads --type=text/html as one argument" \
+    -- type_flag_gives_its_mime_type "${parser_name}" 'text/html' 1 \
+    '--type=text/html'
+  bats_test_function \
+    --description "${parser_name} reads --type application/xml as two arguments" \
+    -- type_flag_gives_its_mime_type "${parser_name}" 'application/xml' 2 \
+    '--type' 'application/xml'
+  bats_test_function \
+    --description "${parser_name} refuses --type without a value" \
+    -- type_flag_refuses_an_empty_mime_type "${parser_name}" "${usage_name}" \
+    '--type'
+  bats_test_function \
+    --description "${parser_name} refuses --type= with an empty value" \
+    -- type_flag_refuses_an_empty_mime_type "${parser_name}" "${usage_name}" \
+    '--type='
+done
+
+# endregion --type
+
+# region --image
+
+#######################################
+# Check that an --image flag gives the MIME type of its format.
+#
+# Arguments:
+#   1: The parser: __cp_parse_image_flag or __ps_parse_image_flag.
+#   2: The flag.
+#   3: The MIME type expected.
+#######################################
+function image_flag_gives_its_mime_type() {
+  # Arrange: the flag is the input.
+  local -r parser="$1"
+  local -r flag="$2"
+  local -r expected_mime="$3"
+  local -A options=(['mime_type']='' ['is_raw']=0)
+
+  # Act
+  "${parser}" options "${flag}"
+
+  # Assert
+  [[ "${options['mime_type']}" == "${expected_mime}" ]]
+}
+
+for parser_name in __cp_parse_image_flag __ps_parse_image_flag; do
+  bats_test_function --description "${parser_name} reads --image as image/png" \
+    -- image_flag_gives_its_mime_type "${parser_name}" '--image' 'image/png'
+  bats_test_function \
+    --description "${parser_name} reads --image=jpg as image/jpeg" \
+    -- image_flag_gives_its_mime_type "${parser_name}" '--image=jpg' 'image/jpeg'
+  bats_test_function \
+    --description "${parser_name} reads --image=svg as image/svg+xml" \
+    -- image_flag_gives_its_mime_type "${parser_name}" '--image=svg' 'image/svg+xml'
+done
+
+@test "__cp_parse_image_flag keeps an image payload raw" {
+  # Arrange
+  local -A options=(['mime_type']='' ['is_raw']=0)
+
+  # Act
+  __cp_parse_image_flag options '--image'
+
+  # Assert
+  ((options['is_raw'] == 1))
+}
+
+@test "__cp_parse_image_flag refuses --image= and leaves the options alone" {
   # Arrange:
-  # pre-poison every slot
-  # so the test fails if init_options forgets a slot.
-  local -i raw=9 trim=9 append=9 auto=9 debug=9
-  local mime='dirty'
+  # the call runs in this shell, not through run,
+  # so the test sees what it does to the options.
+  local -A options=(['mime_type']='' ['is_raw']=0)
+  local -r stderr_path="${BATS_TEST_TMPDIR}/stderr"
+  local -i code=0
 
   # Act
-  __cp_init_options raw trim append auto debug mime
+  __cp_parse_image_flag options '--image=' 2>"${stderr_path}" || code=$?
 
   # Assert
-  [ "$raw" -eq 0 ]
-  [ "$trim" -eq 0 ]
-  [ "$append" -eq 0 ]
-  [ "$auto" -eq 1 ]
-  [ "$debug" -eq 0 ]
-  [ "$mime" = '' ]
+  ((code == COPY_ERR_USAGE))
+  [[ "$(<"${stderr_path}")" == *'--image=FORMAT requires a format'* ]]
+  ((options['is_raw'] == 0))
+  [[ -z "${options['mime_type']}" ]]
 }
 
-@test "__ps_init_options resets every slot" {
+# endregion --image
+
+# region The command line of copy
+
+@test "__cp_parse_arguments reads every option of a full command line" {
   # Arrange
-  local mime='dirty'
-  local -i is_binary=9 debug=9
+  local -A options=()
+  local -a positional=()
+  __cp_init_options options
 
   # Act
-  __ps_init_options mime is_binary debug
+  __cp_parse_arguments options positional \
+    --raw --trim -a --debug --type=text/markdown -- leftover words
 
   # Assert
-  [ "$mime" = '' ]
-  [ "$is_binary" -eq 0 ]
-  [ "$debug" -eq 0 ]
+  ((options['is_raw'] == 1))
+  ((options['should_trim'] == 1))
+  ((options['should_append'] == 1))
+  ((options['is_debug'] == 1))
+  [[ "${options['mime_type']}" == 'text/markdown' ]]
+  [[ "${positional[*]}" == 'leftover words' ]]
 }
 
-# endregion
-
-
-# region __cp_parse_type_flag / __ps_parse_type_flag
-
-@test "__cp_parse_type_flag accepts both --type=MIME and --type MIME" {
+@test "__cp_parse_arguments reads --type MIME across two arguments" {
   # Arrange
-  local mime=''
-  local -i consumed=0
-
-  # Act (equals form)
-  __cp_parse_type_flag mime consumed '--type=text/html'
-
-  # Assert
-  [ "$mime" = 'text/html' ]
-  [ "$consumed" -eq 1 ]
-
-  # Act (two-arg form)
-  __cp_parse_type_flag mime consumed '--type' 'application/xml'
-
-  # Assert
-  [ "$mime" = 'application/xml' ]
-  [ "$consumed" -eq 2 ]
-}
-
-@test "__cp_parse_type_flag rejects empty MIME values" {
-  # Arrange
-  local mime=''
-  local -i consumed=0
-  local -i rc=0
-
-  # Act (no value at all)
-  __cp_parse_type_flag mime consumed '--type' 2>/dev/null || rc=$?
-  [ "$rc" -eq "$COPY_ERR_USAGE" ]
-
-  # Act (=empty form)
-  rc=0
-  __cp_parse_type_flag mime consumed '--type=' 2>/dev/null || rc=$?
-  [ "$rc" -eq "$COPY_ERR_USAGE" ]
-}
-
-@test "__ps_parse_type_flag mirrors __cp_parse_type_flag" {
-  # Arrange
-  local mime=''
-  local -i consumed=0
-  local -i rc=0
-
-  # Act / Assert (success)
-  __ps_parse_type_flag mime consumed '--type=text/markdown'
-  [ "$mime" = 'text/markdown' ]
-  [ "$consumed" -eq 1 ]
-
-  # Act / Assert (error)
-  __ps_parse_type_flag mime consumed '--type=' 2>/dev/null || rc=$?
-  [ "$rc" -eq "$PAST_ERR_USAGE" ]
-}
-
-# endregion
-
-
-# region __cp_parse_image_flag / __ps_parse_image_flag
-
-@test "__cp_parse_image_flag bare --image yields image/png and raw=1" {
-  # Arrange
-  local mime=''
-  local -i raw=0 consumed=0
+  local -A options=()
+  local -a positional=()
+  __cp_init_options options
 
   # Act
-  __cp_parse_image_flag mime raw consumed '--image'
+  __cp_parse_arguments options positional --type text/html hello
 
   # Assert
-  [ "$mime" = 'image/png' ]
-  [ "$raw" -eq 1 ]
-  [ "$consumed" -eq 1 ]
+  [[ "${options['mime_type']}" == 'text/html' ]]
+  [[ "${positional[*]}" == 'hello' ]]
 }
 
-@test "__cp_parse_image_flag --image=FORMAT delegates to format-to-mime" {
+#######################################
+# Check that a JSON flag of copy sets application/json and keeps it raw,
+# and leaves auto-detection to the check of the options.
+#
+# Arguments:
+#   1: The flag: -j or --json.
+#######################################
+function json_flag_sets_json_and_raw() {
   # Arrange
-  local mime=''
-  local -i raw=0 consumed=0
+  local -r flag="$1"
+  local -A options=()
+  local -a positional=()
+  __cp_init_options options
 
   # Act
-  __cp_parse_image_flag mime raw consumed '--image=svg'
+  __cp_parse_arguments options positional "${flag}"
 
   # Assert
-  [ "$mime" = 'image/svg+xml' ]
-  [ "$raw" -eq 1 ]
+  [[ "${options['mime_type']}" == 'application/json' ]]
+  ((options['is_raw'] == 1))
+  ((options['should_detect_mime'] == 1))
 }
 
-@test "__cp_parse_image_flag rejects --image= (empty format)" {
+for flag_name in -j --json; do
+  bats_test_function \
+    --description "__cp_parse_arguments reads ${flag_name} as application/json, raw" \
+    -- json_flag_sets_json_and_raw "${flag_name}"
+done
+
+@test "__cp_parse_arguments takes the words after -- as text" {
   # Arrange
-  local mime=''
-  local -i raw=0 consumed=0 rc=0
+  local -A options=()
+  local -a positional=()
+  __cp_init_options options
 
   # Act
-  __cp_parse_image_flag mime raw consumed '--image=' 2>/dev/null \
-    || rc=$?
+  __cp_parse_arguments options positional -- --not-a-flag
 
   # Assert
-  [ "$rc" -eq "$COPY_ERR_USAGE" ]
-  [ "$raw" -eq 0 ]
+  [[ "${positional[*]}" == '--not-a-flag' ]]
+  ((options['is_raw'] == 0))
 }
 
-@test "__ps_parse_image_flag bare --image yields image/png" {
+@test "__cp_parse_arguments refuses an unknown option with the usage code" {
   # Arrange
-  local mime=''
-  local -i consumed=0
+  local -A options=()
+  local -a positional=()
+  __cp_init_options options
 
   # Act
-  __ps_parse_image_flag mime consumed '--image'
+  run --separate-stderr __cp_parse_arguments options positional --bogus
 
   # Assert
-  [ "$mime" = 'image/png' ]
+  ((status == COPY_ERR_USAGE))
+  [[ "${stderr}" == *'unknown option: --bogus'* ]]
 }
 
-# endregion
-
-
-# region __cp_parse_args
-
-@test "__cp_parse_args populates every slot from a full argv" {
-  # Arrange
-  local -i raw=0 trim=0 append=0 auto=1 debug=0
-  local mime=''
-  local -a rest=()
+@test "__cp_parse_arguments stops at --help and asks for the help" {
+  # Arrange:
+  # --bogus after --help would be an error,
+  # so success shows that the parsing stops at --help.
+  local -A options=()
+  local -a positional=()
+  __cp_init_options options
 
   # Act
-  __cp_parse_args raw trim append auto debug mime rest \
-    --raw --trim -a --debug --type=text/markdown -- leftover args
+  __cp_parse_arguments options positional --help --bogus
 
   # Assert
-  [ "$raw" -eq 1 ]
-  [ "$trim" -eq 1 ]
-  [ "$append" -eq 1 ]
-  [ "$debug" -eq 1 ]
-  [ "$mime" = 'text/markdown' ]
-  [ "${rest[0]}" = 'leftover' ]
-  [ "${rest[1]}" = 'args' ]
+  ((options['should_show_help'] == 1))
 }
 
-@test "__cp_parse_args treats -j/--json as MIME pin + raw" {
+# endregion The command line of copy
+
+# region The command line of past
+
+@test "__ps_parse_arguments reads --json and --debug" {
   # Arrange
-  local -i raw=0 trim=0 append=0 auto=1 debug=0
-  local mime=''
-  local -a rest=()
+  local -A options=()
+  __ps_init_options options
 
   # Act
-  __cp_parse_args raw trim append auto debug mime rest --json
+  __ps_parse_arguments options --json --debug
 
   # Assert
-  [ "$mime" = 'application/json' ]
-  [ "$raw" -eq 1 ]
-  # auto is NOT flipped here; the validate phase is what flips it
-  # in response to an explicit MIME pin.
-  [ "$auto" -eq 1 ]
+  [[ "${options['mime_type']}" == 'application/json' ]]
+  ((options['is_debug'] == 1))
 }
 
-@test "__cp_parse_args -- terminates parsing and forwards literal flags" {
+@test "__ps_parse_arguments stops at --help and asks for the help" {
   # Arrange
-  local -i raw=0 trim=0 append=0 auto=1 debug=0
-  local mime=''
-  local -a rest=()
+  local -A options=()
+  __ps_init_options options
 
   # Act
-  __cp_parse_args raw trim append auto debug mime rest \
-    -- --not-a-flag
+  __ps_parse_arguments options --help stray-word
 
   # Assert
-  [ "${rest[0]}" = '--not-a-flag' ]
+  ((options['should_show_help'] == 1))
 }
 
-@test "__cp_parse_args rejects unknown options with COPY_ERR_USAGE" {
+@test "__ps_parse_arguments refuses a word that is no option with the usage code" {
   # Arrange
-  local -i raw=0 trim=0 append=0 auto=1 debug=0
-  local mime=''
-  local -a rest=()
-  local -i rc=0
+  local -A options=()
+  __ps_init_options options
 
   # Act
-  __cp_parse_args raw trim append auto debug mime rest --bogus \
-    2>/dev/null || rc=$?
+  run --separate-stderr __ps_parse_arguments options stray-word
 
   # Assert
-  [ "$rc" -eq "$COPY_ERR_USAGE" ]
+  ((status == PAST_ERR_USAGE))
+  [[ "${stderr}" == *'unknown argument: stray-word'* ]]
 }
 
-@test "__cp_parse_args reports help via the rc=200 sentinel" {
+# endregion The command line of past
+
+# region The debug flags
+
+#######################################
+# Check that a debug flag of copy turns on the debug log.
+#
+# Arguments:
+#   1: The flag: -d, --debug or --verbose.
+#######################################
+function copy_debug_flag_turns_on_the_log() {
   # Arrange
-  local -i raw=0 trim=0 append=0 auto=1 debug=0
-  local mime=''
-  local -a rest=()
-  local -i rc=0
+  local -r flag="$1"
+  local -A options=()
+  local -a positional=()
+  __cp_init_options options
 
   # Act
-  __cp_parse_args raw trim append auto debug mime rest --help \
-    >/dev/null || rc=$?
+  __cp_parse_arguments options positional "${flag}"
 
   # Assert
-  [ "$rc" -eq 200 ]
+  ((options['is_debug'] == 1))
 }
 
-@test "__cp_parse_args accepts -d, --debug, and --verbose synonyms" {
-  # Arrange / Act / Assert: each form must flip debug to 1.
-  local -i raw=0 trim=0 append=0 auto=1 debug=0
-  local mime=''
-  local -a rest=()
-
-  __cp_parse_args raw trim append auto debug mime rest -d
-  [ "$debug" -eq 1 ]
-
-  debug=0
-  __cp_parse_args raw trim append auto debug mime rest --debug
-  [ "$debug" -eq 1 ]
-
-  debug=0
-  __cp_parse_args raw trim append auto debug mime rest --verbose
-  [ "$debug" -eq 1 ]
-}
-
-# endregion
-
-
-# region __ps_parse_args
-
-@test "__ps_parse_args populates mime_type from --json and accepts --debug" {
+#######################################
+# Check that a debug flag of past turns on the debug log.
+#
+# Arguments:
+#   1: The flag: -d, --debug or --verbose.
+#######################################
+function past_debug_flag_turns_on_the_log() {
   # Arrange
-  local mime=''
-  local -i debug=0
+  local -r flag="$1"
+  local -A options=()
+  __ps_init_options options
 
   # Act
-  __ps_parse_args mime debug --json --debug
+  __ps_parse_arguments options "${flag}"
 
   # Assert
-  [ "$mime" = 'application/json' ]
-  [ "$debug" -eq 1 ]
+  ((options['is_debug'] == 1))
 }
 
-@test "__ps_parse_args reports help via rc=200" {
+for flag_name in -d --debug --verbose; do
+  bats_test_function \
+    --description "__cp_parse_arguments reads ${flag_name} as the debug flag" \
+    -- copy_debug_flag_turns_on_the_log "${flag_name}"
+  bats_test_function \
+    --description "__ps_parse_arguments reads ${flag_name} as the debug flag" \
+    -- past_debug_flag_turns_on_the_log "${flag_name}"
+done
+
+# endregion The debug flags
+
+# region The check of the options
+
+#######################################
+# Check that an option for text refuses a binary MIME type.
+#
+# Arguments:
+#   1: The option: should_append or should_trim.
+#   2: The binary MIME type.
+#   3: The text of the message expected.
+#######################################
+function text_option_refuses_binary_mime() {
   # Arrange
-  local mime=''
-  local -i debug=0 rc=0
+  local -r option_key="$1"
+  local -r mime_type="$2"
+  local -r expected_message="$3"
+  local -A options=()
+  __cp_init_options options
+  options["${option_key}"]=1
+  options['mime_type']="${mime_type}"
 
   # Act
-  __ps_parse_args mime debug --help >/dev/null || rc=$?
+  run --separate-stderr __cp_validate_options options
 
   # Assert
-  [ "$rc" -eq 200 ]
+  ((status == COPY_ERR_TYPE_MISMATCH))
+  [[ "${stderr}" == *"${expected_message}"* ]]
 }
 
-@test "__ps_parse_args rejects stray positional with PAST_ERR_USAGE" {
+for mime_name in image/png application/octet-stream; do
+  bats_test_function \
+    --description "__cp_validate_options refuses --append with ${mime_name}" \
+    -- text_option_refuses_binary_mime 'should_append' "${mime_name}" \
+    '--append is only valid for text payloads'
+  bats_test_function \
+    --description "__cp_validate_options refuses --trim with ${mime_name}" \
+    -- text_option_refuses_binary_mime 'should_trim' "${mime_name}" \
+    '--trim is only valid for text payloads'
+done
+
+@test "__cp_validate_options turns auto-detection off for an explicit MIME type" {
   # Arrange
-  local mime=''
-  local -i debug=0 rc=0
+  local -A options=()
+  __cp_init_options options
+  options['mime_type']='application/json'
 
   # Act
-  __ps_parse_args mime debug stray-arg 2>/dev/null || rc=$?
+  __cp_validate_options options
 
   # Assert
-  [ "$rc" -eq "$PAST_ERR_USAGE" ]
+  ((options['should_detect_mime'] == 0))
 }
 
-@test "__ps_parse_args accepts -d, --debug, and --verbose synonyms" {
+@test "__cp_validate_options turns auto-detection off for --append" {
   # Arrange
-  local mime=''
-  local -i debug=0
-
-  # Act / Assert
-  __ps_parse_args mime debug -d
-  [ "$debug" -eq 1 ]
-
-  debug=0
-  __ps_parse_args mime debug --debug
-  [ "$debug" -eq 1 ]
-
-  debug=0
-  __ps_parse_args mime debug --verbose
-  [ "$debug" -eq 1 ]
-}
-
-# endregion
-
-
-# region __cp_validate_options
-
-@test "__cp_validate_options rejects --append + binary MIME (rc=5)" {
-  # Arrange
-  local -i auto=1 rc=0
+  local -A options=()
+  __cp_init_options options
+  options['should_append']=1
 
   # Act
-  __cp_validate_options auto 1 0 'image/png' 2>/dev/null || rc=$?
+  __cp_validate_options options
 
   # Assert
-  [ "$rc" -eq "$COPY_ERR_TYPE_MISMATCH" ]
+  ((options['should_detect_mime'] == 0))
 }
 
-@test "__cp_validate_options rejects --trim + binary MIME (rc=5)" {
+@test "__cp_validate_options keeps auto-detection on for plain options" {
   # Arrange
-  local -i auto=1 rc=0
+  local -A options=()
+  __cp_init_options options
 
   # Act
-  __cp_validate_options auto 0 1 'application/octet-stream' \
-    2>/dev/null || rc=$?
+  __cp_validate_options options
 
   # Assert
-  [ "$rc" -eq "$COPY_ERR_TYPE_MISMATCH" ]
+  ((options['should_detect_mime'] == 1))
 }
 
-@test "__cp_validate_options disables auto when an explicit MIME is set" {
-  # Arrange
-  local -i auto=1
+# endregion The check of the options
 
-  # Act
-  __cp_validate_options auto 0 0 'application/json'
-
-  # Assert
-  [ "$auto" -eq 0 ]
-}
-
-@test "__cp_validate_options disables auto under --append (text-only)" {
-  # Arrange
-  local -i auto=1
-
-  # Act
-  __cp_validate_options auto 1 0 ''
-
-  # Assert
-  [ "$auto" -eq 0 ]
-}
-
-@test "__cp_validate_options keeps auto on for plain text input" {
-  # Arrange
-  local -i auto=1
-
-  # Act
-  __cp_validate_options auto 0 0 ''
-
-  # Assert
-  [ "$auto" -eq 1 ]
-}
-
-# endregion
-
-### End of file
+### End
