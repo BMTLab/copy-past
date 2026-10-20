@@ -110,7 +110,7 @@ function setup() {
   # a check for the name copy once let its status 1 pass in silence.
   mkdir -p -- "${broken_bin}"
   printf '#!/usr/bin/env bash\nexit 1\n' >"${broken_bin}/rm"
-  chmod +x -- "${broken_bin}/rm"
+  chmod +x "${broken_bin}/rm"
   printf '%s' 'data' >"${payload_path}"
 
   # Act

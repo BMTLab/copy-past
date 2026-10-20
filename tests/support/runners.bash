@@ -236,7 +236,7 @@ function run_in_terminal() {
       "${prelude}" \
       "${snippet}"
   } >"${snippet_path}"
-  chmod +x -- "${snippet_path}"
+  chmod +x "${snippet_path}"
 
   if [[ "${OSTYPE}" == darwin* ]]; then
     # BSD script takes the command and its arguments after the file.

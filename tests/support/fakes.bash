@@ -34,7 +34,7 @@ function setup_fake_backends() {
 #!/usr/bin/env bash
 cat >${FAKE_CLIPBOARD_FILE@Q}
 EOF
-  chmod +x -- "${FAKE_BIN}/wl-copy"
+  chmod +x "${FAKE_BIN}/wl-copy"
 
   # Without --no-newline, the real wl-paste adds one newline to text,
   # even after a newline of the text itself; past removes exactly one.
@@ -63,7 +63,7 @@ fi
 
 exit "\${FAKE_WL_PASTE_CODE:-0}"
 EOF
-  chmod +x -- "${FAKE_BIN}/wl-paste"
+  chmod +x "${FAKE_BIN}/wl-paste"
 
   for stub in xclip xsel; do
     cat >"${FAKE_BIN}/${stub}" <<'EOF'
@@ -71,7 +71,7 @@ EOF
 printf 'fake %s should not be called\n' "${0##*/}" >&2
 exit 99
 EOF
-    chmod +x -- "${FAKE_BIN}/${stub}"
+    chmod +x "${FAKE_BIN}/${stub}"
   done
 
   export PATH="${FAKE_BIN}:${PATH}"
@@ -110,7 +110,7 @@ else
   cat ${FAKE_CLIPBOARD_FILE@Q}
 fi
 EOF
-  chmod +x -- "${FAKE_BIN}/xclip"
+  chmod +x "${FAKE_BIN}/xclip"
 }
 
 #######################################
@@ -136,7 +136,7 @@ else
   cat ${FAKE_CLIPBOARD_FILE@Q}
 fi
 EOF
-  chmod +x -- "${FAKE_BIN}/xsel"
+  chmod +x "${FAKE_BIN}/xsel"
 }
 
 #######################################
@@ -172,7 +172,7 @@ if [[ -n ${message@Q} ]]; then
 fi
 exit ${exit_code@Q}
 EOF
-  chmod +x -- "${FAKE_BIN}/wl-copy"
+  chmod +x "${FAKE_BIN}/wl-copy"
 }
 
 #######################################
@@ -197,7 +197,7 @@ cat >${FAKE_CLIPBOARD_FILE@Q}
 sleep ${seconds@Q} 3>&- &
 exit 0
 EOF
-  chmod +x -- "${FAKE_BIN}/wl-copy"
+  chmod +x "${FAKE_BIN}/wl-copy"
 }
 
 # endregion Backend switches
