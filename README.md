@@ -307,6 +307,10 @@ make format            # rewrite scripts with shfmt
 make check-deps        # show runtime + dev tooling status
 ```
 
+With [GNU parallel](https://www.gnu.org/software/parallel/) installed,
+the test targets run the tests at the same time;
+`make test BATS_JOBS='--jobs 1'` runs them one by one.
+
 Test layout:
 
 ```

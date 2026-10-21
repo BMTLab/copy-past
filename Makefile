@@ -37,6 +37,11 @@ INSTALL_BIN ?= install
 SHFMT_FLAGS      := -i 2 -ci -bn
 # .shellcheckrc holds the rules of shellcheck, for make, CI and editors alike.
 SHELLCHECK_FLAGS :=
+# bats runs the tests at the same time where GNU parallel is,
+# since each test keeps its files in BATS_TEST_TMPDIR;
+# BATS_JOBS='--jobs 1' on the command line runs them one by one.
+# getconf counts the CPUs on macOS too, which has no nproc.
+BATS_JOBS        := $(if $(shell command -v parallel),--jobs $(shell getconf _NPROCESSORS_ONLN))
 
 
 # ─── Platform detection ──────────────────────────────────────────────────
@@ -126,6 +131,7 @@ help:  ## Show this help (default target)
 	@printf '\n  $(C_BOLD)Variables:$(C_RESET)\n'
 	@printf '    PREFIX           Install prefix (current: $(C_DIM)%s$(C_RESET))\n' '$(PREFIX)'
 	@printf '    INSTALL_MODE     symlink|copy (current: $(C_DIM)%s$(C_RESET))\n' '$(INSTALL_MODE)'
+	@printf '    BATS_JOBS        bats --jobs, where GNU parallel is (current: $(C_DIM)%s$(C_RESET))\n' '$(or $(BATS_JOBS),none)'
 	@printf '    NO_COLOR         Set to disable coloured output\n\n'
 
 info:  ## Show resolved build configuration
@@ -136,6 +142,7 @@ info:  ## Show resolved build configuration
 	@printf '    Prefix           %s\n' '$(PREFIX)'
 	@printf '    Bin dir          %s\n' '$(BIN_DIR)'
 	@printf '    Install mode     %s\n' '$(INSTALL_MODE)'
+	@printf '    Bats jobs        %s\n' '$(or $(BATS_JOBS),none)'
 	@printf '    sudo required    %s\n' '$(if $(SUDO),yes,no)'
 	@printf '    Scripts          %s\n\n' '$(SCRIPTS)'
 
@@ -239,26 +246,26 @@ format-check:  ## Verify shfmt formatting without writing
 
 test:  ## Run the full bats suite
 	$(call log_step,'bats')
-	@$(BATS) -r tests/
+	@$(BATS) $(BATS_JOBS) -r tests/
 
 test-verbose:  ## Run bats with verbose / on-failure-print output
-	@$(BATS) -r --verbose-run --print-output-on-failure tests/
+	@$(BATS) $(BATS_JOBS) -r --verbose-run --print-output-on-failure tests/
 
 test-unit:  ## Run unit tests only (fast)
 	$(call log_step,'bats: unit')
-	@$(BATS) -r tests/unit/
+	@$(BATS) $(BATS_JOBS) -r tests/unit/
 
 test-integration:  ## Run integration tests only
 	$(call log_step,'bats: integration')
-	@$(BATS) -r tests/integration/
+	@$(BATS) $(BATS_JOBS) -r tests/integration/
 
 test-watch:  ## Re-run bats on every change (needs `entr` or `fswatch`)
 	@if command -v entr > /dev/null 2>&1; then \
 		printf '  $(C_CYAN)→$(C_RESET) watching with entr (Ctrl-C to stop)\n'; \
-		find $(SCRIPTS) tests -type f | entr -c $(BATS) -r tests/; \
+		find $(SCRIPTS) tests -type f | entr -c $(BATS) $(BATS_JOBS) -r tests/; \
 	elif command -v fswatch > /dev/null 2>&1; then \
 		printf '  $(C_CYAN)→$(C_RESET) watching with fswatch (Ctrl-C to stop)\n'; \
-		fswatch -o $(SCRIPTS) tests | xargs -n1 -I{} $(BATS) -r tests/; \
+		fswatch -o $(SCRIPTS) tests | xargs -n1 -I{} $(BATS) $(BATS_JOBS) -r tests/; \
 	else \
 		printf '  $(C_RED)✗$(C_RESET) need `entr` or `fswatch` for watch mode\n' >&2; \
 		exit 1; \

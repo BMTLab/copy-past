@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- `make test` runs the tests at the same time where GNU parallel is installed,
+  and so does CI;
+  it used to run them one by one,
+  as `make test BATS_JOBS='--jobs 1'` still does.
+
 ## [3.0.0] - 2026-10-21
 
 copy and past now follow the shell style of BMTLab,
