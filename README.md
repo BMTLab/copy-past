@@ -308,7 +308,8 @@ make check-deps        # show runtime + dev tooling status
 ```
 
 With [GNU parallel](https://www.gnu.org/software/parallel/) installed,
-the test targets run the tests at the same time;
+the test targets run the test files at the same time,
+and with 16 CPUs or more the tests of each file too;
 `make test BATS_JOBS='--jobs 1'` runs them one by one.
 
 Test layout:

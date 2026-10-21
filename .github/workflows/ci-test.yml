@@ -18,8 +18,8 @@
 # the real-backend smoke is opportunistic
 # and skipped automatically when unavailable.
 #
-# GNU parallel lets bats run the tests at the same time,
-# as `make test` does on a laptop.
+# GNU parallel lets bats run the test files at the same time,
+# as `make test` does on a machine with fewer than 16 CPUs.
 
 name: Tests CI
 
@@ -227,12 +227,16 @@ jobs:
           # `--report-formatter junit` writes machine-readable XML
           # alongside the human-readable TAP output,
           # so the GitHub UI can render the per-test status natively.
-          # `--jobs` runs the tests at the same time, one per CPU:
+          # `--jobs` runs the test files at the same time, one per CPU:
           # each test keeps its files in BATS_TEST_TMPDIR.
           # getconf counts the CPUs on macOS too, which has no nproc.
+          # The tests of each file still run one by one:
+          # on the few CPUs of a runner, bats would wait a whole second
+          # for each free slot, and the suite would end later.
           bats \
             --recursive \
             --jobs "$(getconf _NPROCESSORS_ONLN)" \
+            --no-parallelize-within-files \
             --report-formatter junit \
             --output "$BATS_RESULTS_DIR" \
             tests/

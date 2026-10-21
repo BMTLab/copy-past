@@ -9,9 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- `make test` runs the tests at the same time where GNU parallel is installed,
-  and so does CI;
-  it used to run them one by one,
+- `make test` runs the test files at the same time
+  where GNU parallel is installed,
+  and with 16 CPUs or more the tests of each file too;
+  CI runs its test files at the same time.
+  It used to run the tests one by one,
   as `make test BATS_JOBS='--jobs 1'` still does.
 
 ## [3.0.0] - 2026-10-21

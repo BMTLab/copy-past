@@ -37,11 +37,16 @@ INSTALL_BIN ?= install
 SHFMT_FLAGS      := -i 2 -ci -bn
 # .shellcheckrc holds the rules of shellcheck, for make, CI and editors alike.
 SHELLCHECK_FLAGS :=
-# bats runs the tests at the same time where GNU parallel is,
-# since each test keeps its files in BATS_TEST_TMPDIR;
-# BATS_JOBS='--jobs 1' on the command line runs them one by one.
+# bats runs the test files at the same time where GNU parallel is,
+# since each test keeps its files in BATS_TEST_TMPDIR.
+# With 16 CPUs or more, it runs the tests of each file at the same time too;
+# with fewer, bats would wait a whole second for each free slot,
+# and the suite would end later than one by one.
+# BATS_JOBS='--jobs 1' on the command line runs the tests one by one.
 # getconf counts the CPUs on macOS too, which has no nproc.
-BATS_JOBS        := $(if $(shell command -v parallel),--jobs $(shell getconf _NPROCESSORS_ONLN))
+BATS_CPUS        := $(shell getconf _NPROCESSORS_ONLN)
+BATS_JOBS        := $(if $(shell command -v parallel),--jobs $(BATS_CPUS) \
+  $(shell (( $(BATS_CPUS) < 16 )) && printf '%s' --no-parallelize-within-files))
 
 
 # ─── Platform detection ──────────────────────────────────────────────────
